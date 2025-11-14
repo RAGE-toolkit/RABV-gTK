@@ -1,0 +1,12 @@
+name: vgtk
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.10
+  - requests
+  - pandas
+  - biopython
+  - blast=2.17.0
+  - nextalign=2.14.0

@@ -1,0 +1,7 @@
+description	display_name	name	parent_name
+Glycoprotein	G	G	whole_genome
+Large protein / RNA polymerase	L	L	whole_genome
+Matrix protein	M	M	whole_genome
+Nucleoprotein	N	N	whole_genome
+Phosphoroprotein	P	P	whole_genome
+Whole genome	Whole genome	whole_genome,NULL
