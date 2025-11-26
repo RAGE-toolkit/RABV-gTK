@@ -1,0 +1,10 @@
+tmp/
+results/
+work/
+.nextflow*
+variant_matrix.csv
+Alignment_consensus.fa
+scripts/__pycache__
+scripts/__pycache__/*.pyc
+scripts/__*
+test_out

@@ -5,8 +5,24 @@ channels:
   - defaults
 dependencies:
   - python=3.10
-  - requests
-  - pandas
-  - biopython
+  # Core Science Stack (Moved from Pip to Conda for MKL/BLAS optimization)
+  - numpy=1.24.3
+  - pandas=2.0.1
+  - matplotlib=3.7.1
+
+  
+  # Bioinformatics (Conda-native)
+  - biopython=1.81
   - blast=2.17.0
   - nextalign=2.14.0
+  
+  # Utilities
+  - requests=2.31.0
+  - openpyxl=3.1.2
+  - tqdm=4.65.0
+  - python-dateutil=2.8.2
+  
+  # Pip-only packages (Only use Pip for things NOT on Conda)
+  - pip
+  - pip:
+      - ncbi-acc-download==0.2.6

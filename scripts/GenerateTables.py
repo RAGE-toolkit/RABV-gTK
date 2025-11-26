@@ -180,7 +180,7 @@ class GenerateTables:
 		blast_dictionary = self.load_blast_hits(self.blast_hits)
 		#self.load_gb_matrix()
 		self.created_alignment_table(blast_dictionary)
-		#self.host_table()
+		self.host_table()
 		self.create_insertion_table()
 
 if __name__ == "__main__":

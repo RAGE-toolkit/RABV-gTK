@@ -6,12 +6,13 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 
 class PadAlignment:
-	def __init__(self, reference_alignment, input_dir, base_dir, output_dir, keep_intermediate_files):
+	def __init__(self, reference_alignment, input_dir, base_dir, output_dir, keep_intermediate_files, new_outputfile=False):
 		self.reference_alignment = reference_alignment
 		self.input_dir = input_dir
 		self.base_dir = base_dir
 		self.output_dir = output_dir
 		self.keep_intermediate_files = keep_intermediate_files
+		self.new_outputfile = new_outputfile
 
 	def insert_gaps(self, reference_aligned, subalignment_seqs):
 		ref_with_gaps_list = list(reference_aligned)
@@ -69,15 +70,19 @@ class PadAlignment:
 					print(f"Deleted intermediate file {padded_file}")
 			shutil.rmtree(output_dir)
 
-	def find_fasta_file(self, input_dir):
+	def find_fasta_file(self, input_dir,new_outputfile=False):
 		directory = join(self.base_dir, self.output_dir)
-		for file in os.listdir(directory):
-			if file.endswith(".fasta") or file.endswith(".fa"):
-				return os.path.join(directory, file)
-		return None
+		if new_outputfile:
+			return os.path.join(directory, "new_output.fasta")
+		else:
+			for file in os.listdir(directory):
+				if file.endswith(".fasta") or file.endswith(".fa"):
+					return os.path.join(directory, file)
+			return None
 
 	def remove_redundant_sequences(self):
-		input_file = self.find_fasta_file(join(self.base_dir, self.output_dir)) 
+		
+		input_file = self.find_fasta_file(join(self.base_dir, self.output_dir),self.new_outputfile) 
 		unique_records = {}
 		for record in SeqIO.parse(input_file, "fasta"):
 			accession = record.id.split('|')[0] if '|' in record.id else record.id
@@ -93,7 +98,8 @@ if __name__ == "__main__":
 	parser.add_argument("-d", "--base_dir", help="Base directory.", default="tmp")
 	parser.add_argument("-o", "--output_dir", help="Directory to save padded subalignments and merged files.", default="Pad-alignment")
 	parser.add_argument("--keep_intermediate_files", action="store_true", help="Keep intermediate files (padded subalignment). Default: disabled (files will be removed).")
-
+	parser.add_argument("-n","--new_outputfile", action="store_true", help="New output file name for the final merged alignment.")
+ 
 	args = parser.parse_args()
 
 	processor = PadAlignment(args.reference_alignment, args.input_dir, args.base_dir, args.output_dir, args.keep_intermediate_files)
