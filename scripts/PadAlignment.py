@@ -44,6 +44,10 @@ class PadAlignment:
 				print(f"Processing subalignment for {ref_id} using {subalignment_file}")
 				subalignment_seqs = list(SeqIO.parse(subalignment_file, "fasta"))
 				updated_seqs = self.insert_gaps(ref_aligned, subalignment_seqs)
+				
+				# Add the reference sequence to the list of sequences
+				updated_seqs.insert(0, ref_record)
+
 				os.makedirs(join(output_dir), exist_ok=True)
 				output_file = os.path.join(output_dir, f"{ref_id}_aligned_padded.fasta")
 				with open(join(output_file), "w") as output_handle:
@@ -51,7 +55,17 @@ class PadAlignment:
 					print(f"Saved updated alignment to {output_file}")
 				merged_sequences.extend(updated_seqs)
 			else:
-				print(f"Subalignment file {subalignment_file} not found. Skipping {ref_id}.")
+				print(f"Subalignment file {subalignment_file} not found. Adding reference only for {ref_id}.")
+				# Even if no subalignment exists (no queries hit this ref), we must include the ref itself
+				# so it appears in the final merged output.
+				updated_seqs = [ref_record]
+				
+				os.makedirs(join(output_dir), exist_ok=True)
+				output_file = os.path.join(output_dir, f"{ref_id}_aligned_padded.fasta")
+				with open(join(output_file), "w") as output_handle:
+					SeqIO.write(updated_seqs, output_handle, "fasta")
+					print(f"Saved reference-only alignment to {output_file}")
+				merged_sequences.extend(updated_seqs)
 
 		if merged_sequences:
 			merged_output_file = os.path.join(base_dir, output_dir, os.path.basename(reference_alignment_file).replace(".fasta", "_merged_MSA.fasta"))
