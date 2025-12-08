@@ -286,6 +286,24 @@ process CREATE_SQLITE_DB {
     '''
 }
 
+process VALIDATE_SEGMENT{
+
+    when:
+        params.is_segmented.toBoolean()
+    input:
+        path gb_matrix
+        path blast_hits
+    output:
+        path "gB_matrix_validated_segment.tsv", emit: validated_matrix
+    shell:
+    '''
+    python !{scripts_dir}/validate_segment.py \
+        -g !{gb_matrix} \
+        -s !{blast_hits} \
+        -o gB_matrix_validated_segment.tsv
+    '''
+}
+
 workflow {
 
     // check some params are in right form
@@ -312,6 +330,13 @@ workflow {
     BLAST_ALIGNMENT(FILTER_AND_EXTRACT.out.query_seqs_out,
                     FILTER_AND_EXTRACT.out.ref_seqs_out,
                     data)
+
+    // Add VALIDATE_SEGMENT here
+    if (params.is_segmented == 'Y') {
+        VALIDATE_SEGMENT(data, BLAST_ALIGNMENT.out.query_uniq_tophits)
+        // Update 'data' to point to the new validated matrix for downstream steps
+        data = VALIDATE_SEGMENT.out.validated_matrix
+    }
 
     NEXTALIGN_ALIGNMENT(data,
                         BLAST_ALIGNMENT.out.grouped_fasta,
