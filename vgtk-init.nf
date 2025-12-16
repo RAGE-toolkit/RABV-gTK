@@ -9,7 +9,7 @@ scripts_dir     = "${projectDir}/scripts"
 // 1. List your script's explicitly defined parameters (keep this in sync!)
 def scriptDefinedParams = [
     'tax_id', 'db_name', 'master_acc', 'is_segmented', 'extra_info_fill', 'test',
-    "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table"
+    "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table","is_flu",
     // Add all parameter names defined above
 ]
 
@@ -61,6 +61,21 @@ process TEST_DEPENDENCIES{
     pip show python-dateutil >> dependency_test.txt
     nextalign --version >> dependency_test.txt
     
+    '''
+}
+
+process VALIDATE_REF_LIST{
+    input:
+        val ref_list
+        val is_segmented
+    output:
+        path "ref_list_validated.txt"
+    shell:
+    '''
+    # check there are three columns, 
+    #1st is accession, 2nd contains master or reference, 3rd is segment (if segmented)
+        python !{scripts_dir}/ValidateRefList.py -r !{ref_list} -s !{is_segmented} -o ref_list_validated.txt
+
     '''
 }
 process FETCH_GENBANK{
@@ -304,6 +319,23 @@ process VALIDATE_SEGMENT{
     '''
 }
 
+process VALIDATE_STRAIN{
+
+    when:
+        params.is_flu == "Y"
+    input:
+        path gb_matrix
+    output:
+        path "gB_matrix_validated_strain.tsv", emit: validated_matrix
+    shell:
+    '''
+    python !{scripts_dir}/validate_strain.py \
+        -g !{gb_matrix} \
+        -o gB_matrix_validated_strain.tsv \
+        -m !{projectDir}/generic/influenza/serotype_mapping.tsv
+    '''
+}
+
 workflow {
 
     // check some params are in right form
@@ -333,10 +365,15 @@ workflow {
 
     // Add VALIDATE_SEGMENT here
     if (params.is_segmented == 'Y') {
+        if (params.is_flu == "Y") {
+            VALIDATE_STRAIN(data)
+            data = VALIDATE_STRAIN.out.validated_matrix
+        }
         VALIDATE_SEGMENT(data, BLAST_ALIGNMENT.out.query_uniq_tophits)
         // Update 'data' to point to the new validated matrix for downstream steps
         data = VALIDATE_SEGMENT.out.validated_matrix
     }
+
 
     NEXTALIGN_ALIGNMENT(data,
                         BLAST_ALIGNMENT.out.grouped_fasta,

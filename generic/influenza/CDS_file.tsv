@@ -1,0 +1,13 @@
+input_fasta	output_fasta	ranges
+refset_1_aln_merged_MSA.fasta	sgt_1_PB2_CDS.fasta	"1:"
+refset_2_aln_merged_MSA.fasta	sgt_2_PB1_CDS.fasta	"1:"
+refset_2_aln_merged_MSA.fasta	sgt_2_PB1_F2_CDS.fasta	"95:"
+refset_3_aln_merged_MSA.fasta	sgt_3_PA_CDS.fasta	"1:"
+refset_3_aln_merged_MSA.fasta	sgt_3_PA_X_CDS.fasta	"1:573,575:"
+refset_4_aln_merged_MSA.fasta	sgt_4_HA_CDS.fasta	"1:"
+refset_5_aln_merged_MSA.fasta	sgt_5_NP_CDS.fasta	"1:"
+refset_6_aln_merged_MSA.fasta	sgt_6_NA_CDS.fasta	"1:"
+refset_7_aln_merged_MSA.fasta	sgt_7_M1_CDS.fasta	"1:"
+refset_7_aln_merged_MSA.fasta	sgt_7_M2_CDS.fasta	"1:26,715:"
+refset_8_aln_merged_MSA.fasta	sgt_8_NS1_CDS.fasta	"1:"
+refset_8_aln_merged_MSA.fasta	sgt_8_NEP_CDS.fasta	"1:33,509:"
