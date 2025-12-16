@@ -136,6 +136,10 @@ class NextalignAlignment:
 	def process(self):
 		query_aln_output_dir = join(self.tmp_dir, self.nextalign_dir, "query_aln")
 		ref_aln_output_dir = join(self.tmp_dir, self.nextalign_dir, "reference_aln")
+		
+		os.makedirs(query_aln_output_dir, exist_ok=True)
+		os.makedirs(ref_aln_output_dir, exist_ok=True)
+
 		#query_table = join(self.table_dir, "query_features.tsv")
 		
 		if self.reference_alignment:

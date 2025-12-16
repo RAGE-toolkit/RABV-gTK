@@ -8,7 +8,7 @@
 scripts_dir     = "${projectDir}/scripts"
 // 1. List your script's explicitly defined parameters (keep this in sync!)
 def scriptDefinedParams = [
-    'tax_id', 'db_name', 'master_acc', 'is_segmented', 'extra_info_fill', 'test',
+    'tax_id', 'db_name', 'is_segmented', 'extra_info_fill', 'test',
     "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table","is_flu",
     // Add all parameter names defined above
 ]
@@ -102,11 +102,16 @@ process FETCH_GENBANK{
 process DOWNLOAD_GFF{
     input:
         val master_acc
+        path master_file_opt
     output:
          path "*.gff3"
     shell:
     '''
-    python "!{scripts_dir}/DownloadGFF.py" --accession_ids "!{master_acc}" -o . -b .
+    MASTER_ARG="!{master_acc}"
+    if [ -f "!{master_file_opt}" ]; then
+        MASTER_ARG="!{master_file_opt}"
+    fi
+    python "!{scripts_dir}/DownloadGFF.py" --accession_ids "$MASTER_ARG" -o . -b .
 
     '''
 }
@@ -179,10 +184,10 @@ process BLAST_ALIGNMENT{
     '''
         if [ "!{params.is_segmented}" = "Y" ]; then
             python "!{scripts_dir}/BlastAlignment.py" -s Y -f "!{params.ref_list}" -q !{query_seqs} -r !{ref_seqs} \
-             -t . -b . -m !{params.master_acc}  -g !{gb_matrix}
+             -t . -b . -m !{params.ref_list}  -g !{gb_matrix}
         else
             python "!{scripts_dir}/BlastAlignment.py" -f "!{params.ref_list}" -q !{query_seqs} -r !{ref_seqs} \
-             -b . -t . -m !{params.master_acc} -g !{gb_matrix}
+             -b . -t . -m !{params.ref_list} -g !{gb_matrix}
         fi
     '''
 }
@@ -199,13 +204,20 @@ process NEXTALIGN_ALIGNMENT{
         path ref_seqs
         path ref_seqs_fasta
         path master_seq_dir
+        val master_acc_str
+        path master_file_opt
     output:
         path "Nextalign", type: 'dir'
     shell:
     '''
+        TARGET_M="!{master_acc_str}"
+        if [ -f "!{master_file_opt}" ]; then
+             TARGET_M="!{master_file_opt}"
+        fi
+
         python !{scripts_dir}/NextalignAlignment.py  -r !{ref_seqs}  \
          -q !{grouped_fasta_dir} -g !{genbank_matrix} -t . \
-         -f !{ref_seqs_fasta} -m !{params.master_acc} -ms !{master_seq_dir} 
+         -f !{ref_seqs_fasta} -m "$TARGET_M" -ms !{master_seq_dir} 
     '''
 }
 
@@ -215,12 +227,20 @@ process PAD_ALIGNMENT{
     publishDir "${params.publish_dir}"
     input:
         path nextalign_dir 
+        val master_acc_str
+        path master_file_opt
     output:
         path "*_merged_MSA.fasta", emit: merged_msa
         path "*_aligned_padded.fasta", emit: padded_fastas, optional: true
     shell:
     '''
-        python !{scripts_dir}/PadAlignment.py  -r !{nextalign_dir}/reference_aln/!{params.master_acc}/!{params.master_acc}.aligned.fasta \
+        TARGET_M="!{master_acc_str}"
+        if [ -f "!{master_file_opt}" ]; then
+             TARGET_M="!{master_file_opt}"
+        fi
+
+        python !{scripts_dir}/PadAlignment.py -nd !{nextalign_dir} \
+        -m "$TARGET_M" \
         -o . -d . -i !{nextalign_dir}/query_aln --keep_intermediate_files 
     '''
 }
@@ -230,16 +250,23 @@ process CALC_ALIGNMENT_CORD {
         path padded_fasta
         path gff_file
         path blast_hits
+        val master_acc_str
+        path master_file_opt
     output:
         path "features.tsv", emit: features
     shell:
     '''
+    TARGET_M="!{master_acc_str}"
+    if [ -f "!{master_file_opt}" ]; then
+            TARGET_M="!{master_file_opt}"
+    fi
+
     # CalcAlignmentCord expects a directory for -i
     mkdir padded_alignments
     cp !{padded_fasta} padded_alignments/
     
     python !{scripts_dir}/CalcAlignmentCord.py -i padded_alignments \
-    -m !{params.master_acc} -g !{gff_file} -bh !{blast_hits} \
+    -m "$TARGET_M" -g !{gff_file} -bh !{blast_hits} \
     -b . -d . -o features.tsv
     '''
 }
@@ -336,6 +363,25 @@ process VALIDATE_STRAIN{
     '''
 }
 
+process PIVOT_TABLE_SEGMENTS{
+    publishDir "${params.publish_dir}"
+    when:
+        params.is_segmented =="Y" &&
+        params.is_flu == "Y"
+    input:
+        path gb_matrix
+    output:
+        path "gB_matrix_pivoted_segments.tsv", emit: pivoted_matrix
+    shell:
+    '''
+
+
+    python !{scripts_dir}/FluPivotTable.py \
+        -g !{gb_matrix} \
+        -o gB_matrix_pivoted_segments.tsv
+    '''
+}
+
 workflow {
 
     // check some params are in right form
@@ -348,7 +394,9 @@ workflow {
     VALIDATE_REF_LIST(params.ref_list, params.is_segmented)
     FETCH_GENBANK(params.tax_id)
 
-    DOWNLOAD_GFF(params.master_acc)
+    def ref_list_file = file(params.ref_list)
+
+    DOWNLOAD_GFF(params.ref_list, ref_list_file)
 
     GENBANK_PARSER(params.ref_list, FETCH_GENBANK.out.gen_bank_XML)
 
@@ -370,6 +418,7 @@ workflow {
         if (params.is_flu == "Y") {
             VALIDATE_STRAIN(data)
             data = VALIDATE_STRAIN.out.validated_matrix
+            PIVOT_TABLE_SEGMENTS(data)
         }
         VALIDATE_SEGMENT(data, BLAST_ALIGNMENT.out.query_uniq_tophits)
         // Update 'data' to point to the new validated matrix for downstream steps
@@ -381,12 +430,18 @@ workflow {
                         BLAST_ALIGNMENT.out.grouped_fasta,
                         BLAST_ALIGNMENT.out.ref_seqs_dir,
                         FILTER_AND_EXTRACT.out.ref_seqs_out,
-                        BLAST_ALIGNMENT.out.master_seq_dir)
-    PAD_ALIGNMENT(NEXTALIGN_ALIGNMENT.out)
+                        BLAST_ALIGNMENT.out.master_seq_dir,
+                        params.ref_list,
+                        ref_list_file)
+    PAD_ALIGNMENT(NEXTALIGN_ALIGNMENT.out,
+                  params.ref_list,
+                  ref_list_file)
     
     CALC_ALIGNMENT_CORD(PAD_ALIGNMENT.out.merged_msa, 
                         DOWNLOAD_GFF.out, 
-                        BLAST_ALIGNMENT.out.query_uniq_tophits)
+                        BLAST_ALIGNMENT.out.query_uniq_tophits,
+                        params.ref_list,
+                        ref_list_file)
                         
     SOFTWARE_VERSION()
     
@@ -394,6 +449,8 @@ workflow {
                     BLAST_ALIGNMENT.out.query_uniq_tophits, 
                     PAD_ALIGNMENT.out.merged_msa, 
                     NEXTALIGN_ALIGNMENT.out)
+
+
                     
     CREATE_SQLITE_DB(data, 
                      CALC_ALIGNMENT_CORD.out.features, 
