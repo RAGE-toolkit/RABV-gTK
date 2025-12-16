@@ -312,7 +312,7 @@ process VALIDATE_SEGMENT{
         path "gB_matrix_validated_segment.tsv", emit: validated_matrix
     shell:
     '''
-    python !{scripts_dir}/validate_segment.py \
+    python !{scripts_dir}/ValidateSegment.py \
         -g !{gb_matrix} \
         -s !{blast_hits} \
         -o gB_matrix_validated_segment.tsv
