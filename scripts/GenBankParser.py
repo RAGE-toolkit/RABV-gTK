@@ -33,12 +33,17 @@ class GenBankParser:
 		try:
 			with open(acc_list_file) as file:
 				for line in file:
-					if self.is_segmented_virus == 'Y':
-						accession, segment_type, accession_type = line.strip().split("\t")
+					parts = line.strip().split("\t")
+					if len(parts) == 3:
+						accession, accession_type, segment = parts
+					elif len(parts) == 2:
+						accession, accession_type = parts
 					else:
-						accession, accession_type = line.strip().split("\t")
+						print(f"Warning: Skipping malformed line in ref list: {line.strip()}")
+						continue
+						
 					if accession not in ref_dict:
-						ref_dict[accession] = accession_type#.append(trimmed_line)
+						ref_dict[accession] = accession_type
 		except FileNotFoundError:
 			print(f"Error!!!: File {acc_list_file} not found. Exiting the program")
 			exit(0)

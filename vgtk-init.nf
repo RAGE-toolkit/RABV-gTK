@@ -329,7 +329,7 @@ process VALIDATE_STRAIN{
         path "gB_matrix_validated_strain.tsv", emit: validated_matrix
     shell:
     '''
-    python !{scripts_dir}/validate_strain.py \
+    python !{scripts_dir}/ValidateStrain.py \
         -g !{gb_matrix} \
         -o gB_matrix_validated_strain.tsv \
         -m !{projectDir}/generic/influenza/serotype_mapping.tsv
@@ -344,6 +344,8 @@ workflow {
     if( !(params.is_segmented in ['Y','N']) ){
         error("ERROR: params.is_segmented should be either Y or N")
     }
+
+    VALIDATE_REF_LIST(params.ref_list, params.is_segmented)
     FETCH_GENBANK(params.tax_id)
 
     DOWNLOAD_GFF(params.master_acc)

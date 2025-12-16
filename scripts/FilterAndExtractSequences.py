@@ -46,8 +46,17 @@ class FilterAndExtractSequences:
 		ref_list = []
 		with open(self.ref_file) as f:
 			for each_ref_line in f:
-				split_ref_line = each_ref_line.split("|")
-				ref_list.append(split_ref_line[0])
+				line = each_ref_line.strip()
+				if not line: continue
+				
+				if '\t' in line:
+					acc = line.split('\t')[0]
+				elif '|' in line:
+					acc = line.split("|")[0]
+				else:
+					acc = line
+				
+				ref_list.append(acc.strip())
 		return ref_list
 
 	def check_gb_division(self):

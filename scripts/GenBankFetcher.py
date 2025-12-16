@@ -93,16 +93,21 @@ class GenBankFetcher:
 		batch_n = self.efetch_batch_size
 		if self.test_run:
 			ids=ids[:50]
-			# read as tsv self.ref_list add to ids, refs are first column
-			ref_list = []
-			with open(self.ref_list, 'r') as f:
-				for line in f:
-					ref_list.append(line.strip().split('\t')[0])
-			ids.extend(ref_list)
-					
-   
-
 			batch_n=10
+
+		if self.ref_list:
+			try:
+				ref_list = []
+				with open(self.ref_list, 'r') as f:
+					for line in f:
+						ref_list.append(line.strip().split('\t')[0])
+				ids.extend(ref_list)
+				print(f"Added {len(ref_list)} IDs from reference list.")
+			except Exception as e:
+				print(f"Warning: Could not read reference list: {e}")
+		
+		# Remove duplicates
+		ids = list(set(ids))
 	
 		max_ids=len(ids)
 		for i in range(0, max_ids, batch_n):
@@ -140,7 +145,24 @@ class GenBankFetcher:
 		print(f"Data written to: {filename}")
 
 	def download(self):
-		ids = self.fetch_ids()
+		if self.test_run:
+			try:
+				search_url = (
+					f"{self.base_url}esearch.fcgi?db=nucleotide"
+					f"&term=txid{self.taxid}[Organism:exp]"
+					f"&retmax=50&idtype=acc"
+					f"&usehistory=y&email={self.email}&retmode=json"
+				)
+				response = requests.get(search_url)
+				response.raise_for_status()
+				data = response.json()
+				ids = data["esearchresult"]["idlist"]
+			except Exception as e:
+				print(f"Warning: Could not fetch IDs for test run: {e}")
+				ids = []
+		else:
+			ids = self.fetch_ids()
+			
 		print(f"Found {len(ids)} IDs")
 		self.fetch_genbank_data(ids)
 

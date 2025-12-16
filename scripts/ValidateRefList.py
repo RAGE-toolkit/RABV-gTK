@@ -4,8 +4,9 @@ import pandas as pd
 import argparse
 
 parser = argparse.ArgumentParser(description="Validate reference list format.")
-parser.add_argument("--ref_list", required=True, help="Path to the reference list TSV file.")
-parser.add_argument("--is_segmented", required=True, help="Indicates if the data is segmented ('Y' or 'N').")
+parser.add_argument("-r", "--ref_list", required=True, help="Path to the reference list TSV file.")
+parser.add_argument("-s", "--is_segmented", required=True, help="Indicates if the data is segmented ('Y' or 'N').")
+parser.add_argument("-o", "--output", required=False, help="Path to the output file.")
 params = parser.parse_args()
 
 # read tsv
@@ -29,4 +30,6 @@ if params.is_segmented == 'Y':
             raise ValueError(f"No master found for segment '{segment}'. Each segment must have one master entry.")
 
 print("Reference list validation passed.")
-    
+if params.output:
+    with open(params.output, 'w') as out_file:
+        out_file.write("Reference list validation passed.\n")

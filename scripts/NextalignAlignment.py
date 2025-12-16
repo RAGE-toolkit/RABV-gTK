@@ -30,6 +30,20 @@ class NextalignAlignment:
 		path = os.path.basename(file_path)
 		return path.split('.')[0]
 
+	def get_master_list(self):
+		if os.path.isfile(self.master_ref):
+			try:
+				df = pd.read_csv(self.master_ref, sep='\t', header=None, dtype=str)
+				if df.shape[1] >= 2:
+					if df[1].str.lower().eq('master').any():
+						masters = df[df[1].str.lower() == 'master']
+						return masters[0].tolist()
+				return df[0].tolist()
+			except:
+				return []
+		else:
+			return [x.strip() for x in self.master_ref.split(',') if x.strip()]
+
 	def nextalign_master(self, query_acc_path, ref_acc_path, query_aln_op):
 		accession = self.path_to_basename(ref_acc_path)
 		command = [
@@ -145,10 +159,13 @@ class NextalignAlignment:
 			for each_ref in os.listdir(self.master_seq_dir):
 				self.nextalign_master(self.ref_fa_file,join(self.master_seq_dir, each_ref),ref_aln_output_dir)
 
-			input_seq = join(ref_aln_output_dir, self.master_ref, self.master_ref + ".aligned.fasta")
-			output_seq = input_seq
-			unique_seqs = RemoveRedundantSequence(input_seq, output_seq)
-			unique_seqs.remove_redundant_fasta()
+			masters = self.get_master_list()
+			for master in masters:
+				input_seq = join(ref_aln_output_dir, master, master + ".aligned.fasta")
+				if os.path.exists(input_seq):
+					output_seq = input_seq
+					unique_seqs = RemoveRedundantSequence(input_seq, output_seq)
+					unique_seqs.remove_redundant_fasta()
 
 			self.update_gb_matrix([query_aln_output_dir, ref_aln_output_dir], self.gb_matrix)
 

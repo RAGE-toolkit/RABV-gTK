@@ -128,18 +128,32 @@ class BlastAlignment:
 		except subprocess.CalledProcessError as e:
 			print(f"Error running blastn: {e}")
 
-	def write_master_seq(self, output_dir):
-		with open(self.db_fasta, "r") as infile:
-			records = SeqIO.parse(infile, "fasta")
-			selected_records = [record for record in records if record.id == self.master_acc]
-			
-		if selected_records:
-			with open(join(output_dir, self.master_acc + '.fasta'), "w") as outfile:
-				SeqIO.write(selected_records, outfile, "fasta")
-				print(f"Sequence '{self.master_acc}' has been saved to {join(output_dir, self.master_acc)}")
+	def get_master_list(self):
+		if os.path.isfile(self.master_acc):
+			try:
+				df = pd.read_csv(self.master_acc, sep='\t', header=None, dtype=str)
+				if df.shape[1] >= 2:
+					if df[1].str.lower().eq('master').any():
+						masters = df[df[1].str.lower() == 'master']
+						return masters[0].tolist()
+				return df[0].tolist()
+			except:
+				return []
 		else:
-			print(f"Sequence ID '{self.master_acc}' not found in {self.db_fasta}")
-			# add close script here
+			return [x.strip() for x in self.master_acc.split(',') if x.strip()]
+
+	def write_master_seq(self, output_dir):
+		masters = self.get_master_list()
+		with open(self.db_fasta, "r") as infile:
+			records = SeqIO.to_dict(SeqIO.parse(infile, "fasta"))
+			
+		for acc in masters:
+			if acc in records:
+				with open(join(output_dir, acc + '.fasta'), "w") as outfile:
+					SeqIO.write(records[acc], outfile, "fasta")
+					print(f"Sequence '{acc}' has been saved to {join(output_dir, acc)}")
+			else:
+				print(f"Sequence ID '{acc}' not found in {self.db_fasta}")
 	
 	def process_non_segmented_virus(self, output_dir, query_fasta):
 		input_file = join(output_dir, "query_tophits.tsv")
@@ -276,7 +290,7 @@ class BlastAlignment:
 		ref_seqs = join(self.base_dir, self.output_dir, "ref_seqs")
 		master_seq = join(self.base_dir, self.output_dir, "master_seq")
 		
-		self.write_master_file(self, master_seq)
+		self.write_master_seq(master_seq)
 
 		with open(input_file, newline='') as file:
 			reader = csv.reader(file, delimiter='\t')
@@ -293,7 +307,13 @@ class BlastAlignment:
 				write_uniq_hits.write('\t'.join(v) + '\n')
 		
 		for line in open(segment_file):
-				accession, segment = line.strip().split('\t')
+				parts = line.strip().split('\t')
+				if len(parts) >= 2:
+					accession = parts[0]
+					segment = parts[-1] # Assume last column is segment
+				else:
+					continue
+
 				accession = accession.split('|')[0]
 				segments[accession] = segment
 
@@ -468,7 +488,7 @@ class BlastAlignment:
 
 		if self.is_segmented_virus == 'Y':
 			self.run_makeblastdb(join(self.base_dir, self.output_dir))
-			self.run_blastn(join(self.base_dir, self.output_dir))
+			self.run_blastn(join(self.base_dir, self.output_dir), self.query_fasta)
 			for each_segment_dir in [join(self.base_dir, self.output_dir, "segment_sorted"), join(self.base_dir, self.output_dir, "segment_sorted_all"), join(self.base_dir, self.output_dir, "segment_merged_fasta")]:
 				self.delete_directory(each_segment_dir)
 
