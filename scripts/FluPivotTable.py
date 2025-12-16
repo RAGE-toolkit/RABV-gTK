@@ -1,6 +1,6 @@
 import csv
 from collections import defaultdict
-from os.path import join, exists
+from os.path import join, exists, dirname
 from os import makedirs
 from argparse import ArgumentParser
 
@@ -69,14 +69,16 @@ def pivot_data(input_file, output_file, required_segments):
 if __name__ == "__main__":
     parser = ArgumentParser(description='Compile the per strain accession numbers to validate a complete genome. Requires deduplicated Genbank matrix')
     parser.add_argument('-g', '--gb_matrix', help='Genbank matrix (deduplicated) to be processed', default='./tmp/Validate-matrix/gB_matrix_validated.tsv')
-    parser.add_argument('-d', '--tmp_dir', help='Path to output folder', default='tmp/Validate-matrix')
-    parser.add_argument('-o', '--output_file', help='Output file name for the pivot strains matrix', default='gB_matrix_cast_strains.tsv')
+    parser.add_argument('-o', '--output_file', help='Output file path for the pivot strains matrix', default='tmp/Validate-matrix/gB_matrix_cast_strains.tsv')
     args = parser.parse_args()
 
-    if not exists(args.tmp_dir):
-        makedirs(args.tmp_dir)
+    output_path = args.output_file
+    
+    # Create output directory if it doesn't exist
+    output_dir = dirname(output_path)
+    if output_dir and not exists(output_dir):
+        makedirs(output_dir)
 
-    output_path = join(args.tmp_dir, args.output_file)
     pivot_data(args.gb_matrix, output_path, required_segments)
 
     print(f"Pivoted data has been written to {output_path}")

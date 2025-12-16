@@ -175,6 +175,7 @@ process BLAST_ALIGNMENT{
     output:
         path "query_tophits.tsv",type: "file", emit: query_tophits
         path "query_uniq_tophits.tsv", type: "file", emit: query_uniq_tophits
+        path "query_uniq_tophit_annotated.tsv", type: "file", optional: true, emit: query_uniq_tophit_annotated
         path "grouped_fasta", type: 'dir', emit: grouped_fasta
         path "ref_seqs", type: 'dir', emit: ref_seqs_dir
         path "ref_seq.fa", type: 'file', emit: ref_seqs_fasta
@@ -418,11 +419,14 @@ workflow {
         if (params.is_flu == "Y") {
             VALIDATE_STRAIN(data)
             data = VALIDATE_STRAIN.out.validated_matrix
-            PIVOT_TABLE_SEGMENTS(data)
         }
-        VALIDATE_SEGMENT(data, BLAST_ALIGNMENT.out.query_uniq_tophits)
+        VALIDATE_SEGMENT(data, BLAST_ALIGNMENT.out.query_uniq_tophit_annotated)
         // Update 'data' to point to the new validated matrix for downstream steps
         data = VALIDATE_SEGMENT.out.validated_matrix
+        
+        if (params.is_flu == "Y") {
+            PIVOT_TABLE_SEGMENTS(data)
+        }
     }
 
 
