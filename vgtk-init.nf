@@ -232,7 +232,6 @@ process PAD_ALIGNMENT{
         path master_file_opt
     output:
         path "*_merged_MSA.fasta", emit: merged_msa
-        path "*_aligned_padded.fasta", emit: padded_fastas, optional: true
     shell:
     '''
         TARGET_M="!{master_acc_str}"
@@ -383,6 +382,150 @@ process PIVOT_TABLE_SEGMENTS{
     '''
 }
 
+process TEST_SEGMENTED_OUTPUT{
+    publishDir "${params.publish_dir}/tests"
+    when:
+        params.is_segmented == "Y" && params.test == "1"
+    input:
+        path annotated_blast
+        path validated_matrix
+        path pivoted_matrix
+    output:
+        path "test_segmented_results.txt"
+    shell:
+    '''
+    #!/bin/bash
+    set -e
+    
+    echo "=== Testing Segmented Virus Pipeline Output ===" > test_segmented_results.txt
+    echo "" >> test_segmented_results.txt
+    
+    # Test 1: Check annotated BLAST file has 5 columns (including segment)
+    echo "Test 1: Checking annotated BLAST file structure..." >> test_segmented_results.txt
+    COLS=$(head -1 !{annotated_blast} | awk -F'\t' '{print NF}')
+    if [ "$COLS" -eq 5 ]; then
+        echo "✓ PASS: Annotated BLAST file has 5 columns (query, reference, score, strand, segment)" >> test_segmented_results.txt
+    else
+        echo "✗ FAIL: Annotated BLAST file has $COLS columns, expected 5" >> test_segmented_results.txt
+        exit 1
+    fi
+    echo "" >> test_segmented_results.txt
+    
+    # Test 2: Check segment_validated column exists and has values
+    echo "Test 2: Checking segment_validated column in matrix..." >> test_segmented_results.txt
+    if head -1 !{validated_matrix} | grep -q "segment_validated"; then
+        echo "✓ PASS: segment_validated column exists" >> test_segmented_results.txt
+        
+        # Count non-empty segment values (excluding "not found")
+        SEGMENT_COUNT=$(tail -n +2 !{validated_matrix} | cut -f 67 | grep -v "^$" | grep -v "not found" | wc -l)
+        TOTAL_COUNT=$(tail -n +2 !{validated_matrix} | wc -l)
+        echo "  - Found $SEGMENT_COUNT records with valid segments out of $TOTAL_COUNT total" >> test_segmented_results.txt
+        
+        if [ "$SEGMENT_COUNT" -gt 0 ]; then
+            echo "✓ PASS: At least some records have segment assignments" >> test_segmented_results.txt
+        else
+            echo "⚠ WARNING: No records have valid segment assignments" >> test_segmented_results.txt
+        fi
+    else
+        echo "✗ FAIL: segment_validated column not found in matrix" >> test_segmented_results.txt
+        exit 1
+    fi
+    echo "" >> test_segmented_results.txt
+    
+    # Test 3: Check pivoted matrix structure (flu only)
+    if [ -f "!{pivoted_matrix}" ]; then
+        echo "Test 3: Checking pivoted segments matrix..." >> test_segmented_results.txt
+        HEADER=$(head -1 !{pivoted_matrix})
+        
+        if echo "$HEADER" | grep -q "Complete_status"; then
+            echo "✓ PASS: Pivoted matrix has Complete_status column" >> test_segmented_results.txt
+        else
+            echo "✗ FAIL: Pivoted matrix missing Complete_status column" >> test_segmented_results.txt
+            exit 1
+        fi
+        
+        # Check for segment columns (1-8)
+        SEGMENT_COLS=$(echo "$HEADER" | grep -o -E '\t[1-8]\t|\t[1-8]$' | wc -l)
+        echo "  - Found $SEGMENT_COLS segment columns" >> test_segmented_results.txt
+        
+        # Count complete genomes
+        COMPLETE=$(tail -n +2 !{pivoted_matrix} | cut -f 10 | grep -c "Complete" || true)
+        INCOMPLETE=$(tail -n +2 !{pivoted_matrix} | cut -f 10 | grep -c "Incomplete" || true)
+        echo "  - Complete genomes: $COMPLETE" >> test_segmented_results.txt
+        echo "  - Incomplete genomes: $INCOMPLETE" >> test_segmented_results.txt
+        
+        if [ "$((COMPLETE + INCOMPLETE))" -gt 0 ]; then
+            echo "✓ PASS: Pivoted matrix contains strain data" >> test_segmented_results.txt
+        else
+            echo "⚠ WARNING: Pivoted matrix is empty" >> test_segmented_results.txt
+        fi
+    else
+        echo "Test 3: SKIPPED - Pivoted matrix not expected for this run" >> test_segmented_results.txt
+    fi
+    echo "" >> test_segmented_results.txt
+    
+    echo "=== All segmented virus tests completed ===" >> test_segmented_results.txt
+    cat test_segmented_results.txt
+    '''
+}
+
+process TEST_NON_SEGMENTED_OUTPUT{
+    publishDir "${params.publish_dir}/tests"
+    when:
+        params.is_segmented == "N" && params.test == "1"
+    input:
+        path blast_hits
+        path gb_matrix
+    output:
+        path "test_non_segmented_results.txt"
+    shell:
+    '''
+    #!/bin/bash
+    set -e
+    
+    echo "=== Testing Non-Segmented Virus Pipeline Output ===" > test_non_segmented_results.txt
+    echo "" >> test_non_segmented_results.txt
+    
+    # Test 1: Check BLAST file has 4 columns (no segment)
+    echo "Test 1: Checking BLAST file structure..." >> test_non_segmented_results.txt
+    COLS=$(head -1 !{blast_hits} | awk -F'\t' '{print NF}')
+    if [ "$COLS" -eq 4 ]; then
+        echo "✓ PASS: BLAST file has 4 columns (query, reference, score, strand)" >> test_non_segmented_results.txt
+    else
+        echo "✗ FAIL: BLAST file has $COLS columns, expected 4" >> test_non_segmented_results.txt
+        exit 1
+    fi
+    echo "" >> test_non_segmented_results.txt
+    
+    # Test 2: Check NO segment_validated column in matrix
+    echo "Test 2: Verifying no segment column for non-segmented virus..." >> test_non_segmented_results.txt
+    if head -1 !{gb_matrix} | grep -q "segment_validated"; then
+        echo "⚠ WARNING: segment_validated column found (unexpected for non-segmented virus)" >> test_non_segmented_results.txt
+    else
+        echo "✓ PASS: No segment_validated column (correct for non-segmented virus)" >> test_non_segmented_results.txt
+    fi
+    echo "" >> test_non_segmented_results.txt
+    
+    # Test 3: Count sequences
+    echo "Test 3: Checking sequence counts..." >> test_non_segmented_results.txt
+    BLAST_COUNT=$(wc -l < !{blast_hits})
+    MATRIX_COUNT=$(tail -n +2 !{gb_matrix} | wc -l)
+    
+    echo "  - BLAST hits: $BLAST_COUNT" >> test_non_segmented_results.txt
+    echo "  - Matrix records: $MATRIX_COUNT" >> test_non_segmented_results.txt
+    
+    if [ "$BLAST_COUNT" -gt 0 ] && [ "$MATRIX_COUNT" -gt 0 ]; then
+        echo "✓ PASS: Pipeline processed sequences" >> test_non_segmented_results.txt
+    else
+        echo "⚠ WARNING: No sequences processed" >> test_non_segmented_results.txt
+    fi
+    echo "" >> test_non_segmented_results.txt
+    
+    echo "=== All non-segmented virus tests completed ===" >> test_non_segmented_results.txt
+    cat test_non_segmented_results.txt
+    '''
+}
+
 workflow {
 
     // check some params are in right form
@@ -426,6 +569,23 @@ workflow {
         
         if (params.is_flu == "Y") {
             PIVOT_TABLE_SEGMENTS(data)
+            
+            // Run tests for segmented viruses
+            if (params.test == "1") {
+                TEST_SEGMENTED_OUTPUT(
+                    BLAST_ALIGNMENT.out.query_uniq_tophit_annotated,
+                    VALIDATE_SEGMENT.out.validated_matrix,
+                    PIVOT_TABLE_SEGMENTS.out.pivoted_matrix
+                )
+            }
+        }
+    } else {
+        // Run tests for non-segmented viruses
+        if (params.test == "1") {
+            TEST_NON_SEGMENTED_OUTPUT(
+                BLAST_ALIGNMENT.out.query_uniq_tophits,
+                data
+            )
         }
     }
 
