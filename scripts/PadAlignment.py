@@ -137,8 +137,8 @@ if __name__ == "__main__":
 	parser.add_argument("-o", "--output_dir", help="Directory to save padded subalignments and merged files.", default="Pad-alignment")
 	parser.add_argument("--keep_intermediate_files", action="store_true", help="Keep intermediate files (padded subalignment). Default: disabled (files will be removed).")
 	parser.add_argument("-n","--new_outputfile", action="store_true", help="New output file name for the final merged alignment.")
-	parser.add_argument("-m", "--master_acc", help="Master accession(s)")
-	parser.add_argument("-nd", "--nextalign_dir", help="Nextalign directory")
+	parser.add_argument("-m", "--master_acc", help="Path to ref_list file (TSV with columns: accession, type, segment) OR comma-separated master accession IDs. For segmented viruses, the script extracts all 'master' entries to process each segment separately.")
+	parser.add_argument("-nd", "--nextalign_dir", help="Path to Nextalign output directory containing reference_aln/ and query_aln/ subdirectories.")
  
 	args = parser.parse_args()
 
