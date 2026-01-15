@@ -54,7 +54,7 @@ class GenBankFetcher:
 	def fetch_accs(self):
 		start_all = time.time()
 
-		# 1) inicializa la historia y recoge WebEnv, QueryKey y count
+		# 1) Initialize search history and retrieve WebEnv, QueryKey and count
 		t0 = time.time()
 		hist_url = (
 			f"{self.base_url}esearch.fcgi?db=nucleotide"
@@ -68,7 +68,7 @@ class GenBankFetcher:
 		count    = int(hist["count"])
 		print(f"[fetch_accs] ESearch history → count={count:,} took {time.time() - t0:.1f}s")
 
-		# 2) paginación en bloques de self.batch_size
+		# 2) Paginate in chunks of self.batch_size
 		all_accs = []
 		for start in range(0, count, self.batch_size):
 			t1 = time.time()
@@ -89,7 +89,7 @@ class GenBankFetcher:
 
 
 	def fetch_genbank_data(self, ids):
-		# usa un batch interno distinto sólo para efetch
+		# Use a separate internal batch size just for efetch
 		batch_n = self.efetch_batch_size
 		if self.test_run:
 			ids=ids[:50]
@@ -121,7 +121,7 @@ class GenBankFetcher:
 			resp = requests.get(url)
 			resp.raise_for_status()
 
-			# aquí pasamos batch_n para nombrar el fichero igual que antes
+			# Pass batch_n here to name the file as before
 			self.save_data(resp.text, i + batch_n)
 
 			print(f"Downloaded XML {i+1:,}–{min(i+batch_n, len(ids)):,}")

@@ -9,7 +9,7 @@ scripts_dir     = "${projectDir}/scripts"
 // 1. List your script's explicitly defined parameters (keep this in sync!)
 def scriptDefinedParams = [
     'tax_id', 'db_name', 'is_segmented', 'extra_info_fill', 'test',
-    "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table","is_flu",
+    "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table", "is_flu", "gene_info",
     // Add all parameter names defined above
 ]
 
@@ -318,7 +318,7 @@ process CREATE_SQLITE_DB {
     -rf !{features} -p !{sequence_alignment} \
     -i !{insertions} -ht !{host_taxa} \
     -s !{software_info} -fa !{fasta_sequences} \
-    -g !{projectDir}/generic/rabv/Tables/gene_info.csv \
+    -g !{params.gene_info} \
     -mc !{projectDir}/assets/m49_country.csv \
     -mir !{projectDir}/assets/m49_intermediate_region.csv \
     -mr !{projectDir}/assets/m49_region.csv \
@@ -533,6 +533,9 @@ workflow {
     TEST_DEPENDENCIES()
     if( !(params.is_segmented in ['Y','N']) ){
         error("ERROR: params.is_segmented should be either Y or N")
+    }
+    if( !params.gene_info ){
+        error("ERROR: params.gene_info is required. Provide a gene_info TSV with columns: description, display_name, name, parent_name")
     }
 
     VALIDATE_REF_LIST(params.ref_list, params.is_segmented)
