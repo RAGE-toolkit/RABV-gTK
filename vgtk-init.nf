@@ -82,6 +82,7 @@ process FETCH_GENBANK{
     publishDir "${params.publish_dir}"
     input:
         val TAX_ID
+        path ref_list
     output:
         path 'GenBank-XML', type: 'dir', emit: gen_bank_XML
     shell:
@@ -89,10 +90,10 @@ process FETCH_GENBANK{
     extra=""
     if( [ "!{params.test}" -eq "1" ] )
     then
-        extra="--test_run --ref_list !{params.ref_list}"
+        extra="--test_run --ref_list !{ref_list}"
     fi
     python !{scripts_dir}/GenBankFetcher.py --taxid !{TAX_ID} -b 50 \
-             ${extra} -e !{params.email} -o .
+             ${extra} -e !{params.email} -o . 
     #--update tmp/GenBank-matrix/gB_matrix_raw.tsv is gonna be problematic for this!
     #what's update doing with a tmp dir?
 
@@ -539,9 +540,8 @@ workflow {
     }
 
     VALIDATE_REF_LIST(params.ref_list, params.is_segmented)
-    FETCH_GENBANK(params.tax_id)
-
     def ref_list_file = file(params.ref_list)
+    FETCH_GENBANK(params.tax_id, ref_list_file)
 
     DOWNLOAD_GFF(params.ref_list, ref_list_file)
 

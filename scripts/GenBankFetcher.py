@@ -19,6 +19,10 @@ class GenBankFetcher:
 		self.update_file = update_file
 		self.test_run = test_run
 		self.ref_list = ref_list
+		
+		# Ensure output directories exist immediately
+		os.makedirs(self.output_dir, exist_ok=True)
+		os.makedirs(join(self.output_dir, self.base_dir), exist_ok=True)
 
 	def get_record_count(self):
 		search_url = f"{self.base_url}esearch.fcgi?db=nucleotide&term=txid{self.taxid}[Organism:exp]&retmode=json&email={self.email}"
@@ -28,30 +32,6 @@ class GenBankFetcher:
 		return int(data['esearchresult']['count'])
 
 	def fetch_ids(self):
-		retmax = self.get_record_count()
-		#search_url = f"{self.base_url}esearch.fcgi?db=nucleotide&term=txid{self.taxid}[Organism:exp]&retmax={retmax}&usehistory=y&email={self.email}&retmode=json"
-		search_url = (
-        f"{self.base_url}esearch.fcgi?db=nucleotide"
-        f"&term=txid{self.taxid}[Organism:exp]"
-        f"&retmax={retmax}&idtype=acc"
-        f"&usehistory=y&email={self.email}&retmode=json"
-    	)
-		
-		response = requests.get(search_url)
-		response.raise_for_status()
-		data = response.json()
-		return data["esearchresult"]["idlist"]
-
-	def fetch_accs(self):
-		retmax = self.get_record_count()
-		search_url = f"{self.base_url}esearch.fcgi?db=nucleotide&term=txid{self.taxid}[Organism:exp]&retmax={retmax}&idtype=acc&usehistory=y&email={self.email}&retmode=json"
-		response = requests.get(search_url)
-		response.raise_for_status()
-		data = response.json()
-		return data["esearchresult"]["idlist"]
-
-
-	def fetch_accs(self):
 		start_all = time.time()
 
 		# 1) Initialize search history and retrieve WebEnv, QueryKey and count
@@ -62,11 +42,18 @@ class GenBankFetcher:
 			f"&retmax=0&idtype=acc"
 			f"&usehistory=y&email={self.email}&retmode=json"
 		)
-		hist = requests.get(hist_url).json()["esearchresult"]
+		resp = requests.get(hist_url)
+		resp.raise_for_status()
+		hist = resp.json()["esearchresult"]
+		
+		count = int(hist["count"])
+		print(f"[fetch_ids] ESearch history → count={count:,} took {time.time() - t0:.1f}s")
+		
+		if count == 0:
+			return []
+
 		webenv   = hist["webenv"]
 		querykey = hist["querykey"]
-		count    = int(hist["count"])
-		print(f"[fetch_accs] ESearch history → count={count:,} took {time.time() - t0:.1f}s")
 
 		# 2) Paginate in chunks of self.batch_size
 		all_accs = []
@@ -78,13 +65,31 @@ class GenBankFetcher:
 				f"&retstart={start}&retmax={self.batch_size}"
 				f"&idtype=acc&retmode=json"
 			)
-			page = requests.get(page_url).json()["esearchresult"]["idlist"]
+			
+			max_retries = 5
+			for attempt in range(max_retries):
+				try:
+					page_resp = requests.get(page_url)
+					page_resp.raise_for_status()
+					data = page_resp.json()
+					if "esearchresult" not in data:
+						raise ValueError("Incomplete JSON response: missing 'esearchresult'")
+					page = data["esearchresult"]["idlist"]
+					break
+				except (requests.exceptions.JSONDecodeError, requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError, ValueError) as e:
+					if attempt == max_retries - 1:
+						print(f"Failed to fetch IDs for chunk starting at {start} after {max_retries} attempts.")
+						raise e
+					wait_time = self.sleep_time * (attempt + 1)
+					print(f"Error fetching IDs ({type(e).__name__}) for chunk starting at {start}. Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
+					sleep(wait_time)
+
 			page = [acc.split('.', 1)[0] for acc in page]
 			all_accs.extend(page)
-			print(f"[fetch_accs] chunk {start:,}-{min(start+self.batch_size, count):,} "
+			print(f"[fetch_ids] chunk {start:,}-{min(start+self.batch_size, count):,} "
 				f"({len(page):,} records) took {time.time() - t1:.1f}s")
 
-		print(f"[fetch_accs] total accs fetched: {len(all_accs):,} in {time.time() - start_all:.1f}s")
+		print(f"[fetch_ids] total accs fetched: {len(all_accs):,} in {time.time() - start_all:.1f}s")
 		return all_accs
 
 
@@ -118,11 +123,24 @@ class GenBankFetcher:
 				f"&id={ids_str}"
 				f"&retmode=xml&email={self.email}"
 			)
-			resp = requests.get(url)
-			resp.raise_for_status()
+			
+			# Retry logic for network interruptions
+			max_retries = 5
+			for attempt in range(max_retries):
+				try:
+					resp = requests.get(url)
+					resp.raise_for_status()
 
-			# Pass batch_n here to name the file as before
-			self.save_data(resp.text, i + batch_n)
+					# Pass batch_n here to name the file as before
+					self.save_data(resp.text, i + batch_n)
+					break # Success, exit retry loop
+				except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError) as e:
+					if attempt == max_retries - 1:
+						print(f"Failed to download batch starting with index {i} after {max_retries} attempts.")
+						raise e
+					wait_time = self.sleep_time * (attempt + 1)
+					print(f"Network error ({type(e).__name__}) for batch starting with index {i}. Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
+					sleep(wait_time)
 
 			print(f"Downloaded XML {i+1:,}–{min(i+batch_n, len(ids)):,}")
 			sleep(self.sleep_time)
@@ -176,7 +194,7 @@ class GenBankFetcher:
 			print("first 10 primary_accession in TSV:", primary_accession[:10])
 
 			print(f"Found {len(primary_accession)} primary_accession")
-			ids = self.fetch_accs()
+			ids = self.fetch_ids()
 			
 			# check NCBI IDs format
 			print("first 10 IDs in NCBI:", ids[:10])
@@ -196,7 +214,7 @@ if __name__ == "__main__":
 	parser.add_argument('-s', '--sleep_time', help='Delay after each set of information fetch', default=2, type=int)
 	parser.add_argument('-d', '--base_dir', help='Directory where all the XML files are stored', default='GenBank-XML')
 	parser.add_argument("--test_run", action="store_true", help="Run a test fetching only a few records for quick testing")
-	parser.add_argument('--ref_list', help='Reference accession list for test run', default='generic/rabv/ref_list.txt')
+	parser.add_argument('--ref_list', help='Reference accession list for test run', default=None)
 	args = parser.parse_args()
 
 	fetcher = GenBankFetcher(
