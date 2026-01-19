@@ -9,13 +9,16 @@ from date_utils import split_date_components
 # add source example NCBI or GISAID, or user define, add temp sequences 
 # temp sequences which should available for temp purpose 
 class GenBankParser:
-	def __init__(self, input_dir, base_dir, output_dir, ref_list, exclusion_list, is_segmented_virus):
+	def __init__(self, input_dir, base_dir, output_dir, ref_list, exclusion_list, is_segmented_virus, test_run=False, test_xml_limit=10, require_refs=False):
 		self.input_dir = input_dir
 		self.base_dir = base_dir
 		self.output_dir = output_dir
 		self.ref_list = ref_list
 		self.exclusion_list = exclusion_list
 		self.is_segmented_virus = is_segmented_virus
+		self.test_run = test_run
+		self.test_xml_limit = test_xml_limit
+		self.require_refs = require_refs
 		os.makedirs(join(self.base_dir, self.output_dir), exist_ok=True)
 
 	def count_ATGCN(self, sequence):
@@ -45,25 +48,23 @@ class GenBankParser:
 					if accession not in ref_dict:
 						ref_dict[accession] = accession_type
 		except FileNotFoundError:
-			print(f"Error!!!: File {acc_list_file} not found. Exiting the program")
-			exit(0)
+			raise FileNotFoundError(f"Reference list not found: {acc_list_file}")
 		return ref_dict
 
 	
 	def load_exclusion_list(self, acc_list_file):
 		if acc_list_file is None:
 			return []
-		ref_list = []
+		exclusion_list = set()
 		try:
 			with open (acc_list_file) as file:
 				for line in file:
 					accession = line.strip()
-					if accession not in ref_list:
-						ref_list.append(accession)
+					if accession:
+						exclusion_list.add(accession)
 		except FileNotFoundError:
 			print(f"Warning: File {acc_list_file} not found. Proceeding with all the available sequences")
-			sleep(10)
-		return ref_list
+		return list(exclusion_list)
 
 	def xml_to_tsv(self, xml_file, ref_seq_dict: dict, exclusion_acc_list: list):
 		tree = ET.parse(xml_file)
@@ -188,7 +189,6 @@ class GenBankParser:
 			content['collection_date'] = collection_date
 			
 			split_collection_date = split_date_components(content['collection_date'])
-			coll_day, coll_mon, coll_year = split_collection_date
 			content['collection_day'] = split_collection_date['day']
 			content['collection_mon'] = split_collection_date['month']
 			content['collection_year'] = split_collection_date['year']
@@ -210,14 +210,22 @@ class GenBankParser:
 			content['comment'] = "NA"
 			references = []
 			for reference in gbseq.findall('GBSeq_references/GBReference'):
-				ref = {}
-				content['reference_number'] = reference.find('GBReference_reference').text
-				content['position'] = reference.find('GBReference_position').text
 				authors = [author.text for author in reference.findall('GBReference_authors/GBAuthor')]
-				content['authors'] = ', '.join(authors)
-				content['title'] = reference.find('GBReference_title').text if reference.find('GBReference_title') is not None else None
-				content['journal'] = reference.find('GBReference_journal').text
-				data.append(content)
+				reference_entry = {
+					'reference_number': reference.find('GBReference_reference').text if reference.find('GBReference_reference') is not None else '',
+					'position': reference.find('GBReference_position').text if reference.find('GBReference_position') is not None else '',
+					'authors': ', '.join([a for a in authors if a]),
+					'title': reference.find('GBReference_title').text if reference.find('GBReference_title') is not None else '',
+					'journal': reference.find('GBReference_journal').text if reference.find('GBReference_journal') is not None else '',
+				}
+				references.append(reference_entry)
+
+			content['reference_number'] = '; '.join([r['reference_number'] for r in references if r['reference_number']])
+			content['position'] = '; '.join([r['position'] for r in references if r['position']])
+			content['authors'] = '; '.join([r['authors'] for r in references if r['authors']])
+			content['title'] = '; '.join([r['title'] for r in references if r['title']])
+			content['journal'] = '; '.join([r['journal'] for r in references if r['journal']])
+			data.append(content)
 	
 		return data
 
@@ -230,15 +238,80 @@ class GenBankParser:
 		xml_files = [f for f in os.listdir(directory) if f.lower().endswith('.xml')]
 		return len(xml_files)
 
+	def list_xml_files(self):
+		if not os.path.isdir(self.input_dir):
+			print(f"Error: '{self.input_dir}' is not a valid directory.")
+			return []
+		return sorted([f for f in os.listdir(self.input_dir) if f.lower().endswith('.xml')])
+
+	def find_ref_xml_files(self, ref_accessions, xml_files):
+		if not ref_accessions:
+			return set(), []
+
+		ref_set = set(ref_accessions)
+		found_refs = set()
+		ref_xml_files = set()
+		for xml_name in xml_files:
+			xml_path = join(self.input_dir, xml_name)
+			try:
+				for _, elem in ET.iterparse(xml_path, events=("end",)):
+					if elem.tag == "GBSeq":
+						acc_elem = elem.find('GBSeq_primary-accession')
+						if acc_elem is not None:
+							acc = acc_elem.text
+							if acc in ref_set:
+								found_refs.add(acc)
+								ref_xml_files.add(xml_name)
+						elem.clear()
+				if found_refs == ref_set:
+					break
+			except ET.ParseError as e:
+				print(f"Warning: Skipping malformed XML {xml_name}: {e}")
+
+		missing_refs = sorted(list(ref_set - found_refs))
+		return ref_xml_files, missing_refs
+
+	def select_xml_files(self, ref_accessions, xml_files):
+		if not self.test_run:
+			return xml_files
+
+		if self.test_xml_limit <= 0:
+			return []
+
+		ref_xml_files, missing_refs = self.find_ref_xml_files(ref_accessions, xml_files)
+		if self.require_refs and missing_refs:
+			raise ValueError(f"Missing reference accessions in XML input: {', '.join(missing_refs)}")
+
+		selected = list(ref_xml_files)
+		remaining = [f for f in xml_files if f not in ref_xml_files]
+		for f in remaining:
+			if len(selected) >= self.test_xml_limit:
+				break
+			selected.append(f)
+
+		return selected
+
 	def process(self):
 
 		ref_seq_dict = self.load_ref_list(self.ref_list)
 		exclusion_acc_list = self.load_exclusion_list(self.exclusion_list)
 
-		total_xml = self.count_xml_files()
+		xml_files = self.list_xml_files()
+		if self.require_refs and self.ref_list is None:
+			raise ValueError("Reference list is required when --require_refs is set")
+
+		ref_accessions = list(ref_seq_dict.keys()) if ref_seq_dict else []
+		selected_xml_files = self.select_xml_files(ref_accessions, xml_files)
+
+		if self.require_refs and not self.test_run:
+			_, missing_refs = self.find_ref_xml_files(ref_accessions, xml_files)
+			if missing_refs:
+				raise ValueError(f"Missing reference accessions in XML input: {', '.join(missing_refs)}")
+
+		total_xml = len(selected_xml_files)
 		count = 1
 		merged_data = []
-		for each_xml in os.listdir(self.input_dir):
+		for each_xml in selected_xml_files:
 			print(f"Parsing: {count} of {total_xml}: " + each_xml)
 			data = self.xml_to_tsv(join(self.input_dir, each_xml), ref_seq_dict, exclusion_acc_list)
 			merged_data.extend(data)
@@ -261,8 +334,21 @@ if __name__ == "__main__":
 	parser.add_argument('-r', '--ref_list', help='Set of reference accessions', required=True)
 	parser.add_argument('-e', '--exclusion_list', help='Set of sequence accssions to be excluded')
 	parser.add_argument('-s', '--is_segmented_virus', help='Is segmented virus (Y/N)', default='N')
+	parser.add_argument('--test_run', action='store_true', help='Parse only a subset of XML files')
+	parser.add_argument('--test_xml_limit', type=int, default=10, help='Max number of XML files to parse in test mode')
+	parser.add_argument('--require_refs', action='store_true', help='Fail if any ref_list accession is missing in XML input')
 	args = parser.parse_args()
 
-	parser = GenBankParser(args.input_dir, args.base_dir, args.output_dir, args.ref_list, args.exclusion_list, args.is_segmented_virus)
-	parser.process()
+	gb_parser = GenBankParser(
+		args.input_dir,
+		args.base_dir,
+		args.output_dir,
+		args.ref_list,
+		args.exclusion_list,
+		args.is_segmented_virus,
+		test_run=args.test_run,
+		test_xml_limit=args.test_xml_limit,
+		require_refs=args.require_refs,
+	)
+	gb_parser.process()
 

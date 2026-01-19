@@ -10,6 +10,7 @@ scripts_dir     = "${projectDir}/scripts"
 def scriptDefinedParams = [
     'tax_id', 'db_name', 'is_segmented', 'extra_info_fill', 'test',
     "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table", "is_flu", "gene_info",
+    "XML_source", "xml_dir",
     // Add all parameter names defined above
 ]
 
@@ -128,7 +129,16 @@ process GENBANK_PARSER{
         path "sequences.fa", emit: sequences_out
     shell:
     '''
-        python !{scripts_dir}/GenBankParser.py -r !{ref_list_path} -d !{gen_bank_XML} -o . -b .
+        # force re-run after update
+        extra="--require_refs"
+        if( [ "!{params.XML_source}" = "XML" ] )
+        then
+            if( [ "!{params.test}" -eq "1" ] )
+            then
+                extra="${extra} --test_run"
+            fi
+        fi
+        python !{scripts_dir}/GenBankParser.py -r !{ref_list_path} -d !{gen_bank_XML} -o . -b . ${extra}
         python !{scripts_dir}/ValidateMatrix.py -o . -a !{projectDir}/assets -b . \
         -g gB_matrix_raw.tsv \
         -m !{projectDir}/assets/host_mapping.tsv -n !{projectDir}/assets/country_mapping.tsv  \
@@ -535,17 +545,35 @@ workflow {
     if( !(params.is_segmented in ['Y','N']) ){
         error("ERROR: params.is_segmented should be either Y or N")
     }
+    if( !(params.XML_source in ['Genbank','XML']) ){
+        error("ERROR: params.XML_source should be either Genbank or XML")
+    }
+    if( params.XML_source == 'XML' ){
+        if( !params.xml_dir ){
+            error("ERROR: params.xml_dir is required when params.XML_source=XML")
+        }
+        def xmlDirFile = file(params.xml_dir)
+        if( !xmlDirFile.exists() || !xmlDirFile.isDirectory() ){
+            error("ERROR: params.xml_dir must be an existing directory: ${params.xml_dir}")
+        }
+    }
     if( !params.gene_info ){
         error("ERROR: params.gene_info is required. Provide a gene_info TSV with columns: description, display_name, name, parent_name")
     }
 
     VALIDATE_REF_LIST(params.ref_list, params.is_segmented)
     def ref_list_file = file(params.ref_list)
-    FETCH_GENBANK(params.tax_id, ref_list_file)
+    def genbank_xml_dir
+    if( params.XML_source == 'Genbank' ){
+        FETCH_GENBANK(params.tax_id, ref_list_file)
+        genbank_xml_dir = FETCH_GENBANK.out.gen_bank_XML
+    } else {
+        genbank_xml_dir = file(params.xml_dir)
+    }
 
     DOWNLOAD_GFF(params.ref_list, ref_list_file)
 
-    GENBANK_PARSER(params.ref_list, FETCH_GENBANK.out.gen_bank_XML)
+    GENBANK_PARSER(params.ref_list, genbank_xml_dir)
 
     if(params.extra_info_fill){
         data=ADD_MISSING_DATA(GENBANK_PARSER.out.gb_matrix)
