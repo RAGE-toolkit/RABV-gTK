@@ -76,11 +76,14 @@ class GenBankFetcher:
 						raise ValueError("Incomplete JSON response: missing 'esearchresult'")
 					page = data["esearchresult"]["idlist"]
 					break
-				except (requests.exceptions.JSONDecodeError, requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError, ValueError) as e:
+				except (requests.exceptions.JSONDecodeError, requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError, requests.exceptions.HTTPError, ValueError) as e:
 					if attempt == max_retries - 1:
 						print(f"Failed to fetch IDs for chunk starting at {start} after {max_retries} attempts.")
 						raise e
-					wait_time = self.sleep_time * (attempt + 1)
+					# Check if it's a 429 error and wait longer if so
+					is_429 = isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 429
+					wait_time = (self.sleep_time * (attempt + 1)) + (10 if is_429 else 0)
+					
 					print(f"Error fetching IDs ({type(e).__name__}) for chunk starting at {start}. Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
 					sleep(wait_time)
 
@@ -134,11 +137,15 @@ class GenBankFetcher:
 					# Pass batch_n here to name the file as before
 					self.save_data(resp.text, i + batch_n)
 					break # Success, exit retry loop
-				except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError) as e:
+				except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as e:
 					if attempt == max_retries - 1:
 						print(f"Failed to download batch starting with index {i} after {max_retries} attempts.")
 						raise e
-					wait_time = self.sleep_time * (attempt + 1)
+					
+					# Check if it's a 429 error and wait longer if so
+					is_429 = isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 429
+					wait_time = (self.sleep_time * (attempt + 1)) + (10 if is_429 else 0)
+
 					print(f"Network error ({type(e).__name__}) for batch starting with index {i}. Retrying in {wait_time}s... (Attempt {attempt+1}/{max_retries})")
 					sleep(wait_time)
 
