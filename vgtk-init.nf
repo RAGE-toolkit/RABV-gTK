@@ -300,7 +300,7 @@ process VERY_FAST_TREE{
     shell:
     '''
         seqkit rmdup !{padded_aln} -o !{padded_aln}_dedup.fa
-        !{projectDir}/bin/veryfasttree/VeryFastTree -threads 8 -nt -gtr -double-precision !{padded_aln}_dedup.fa > tree.nwk
+        VeryFastTree -threads 8 -nt -gtr -double-precision !{padded_aln}_dedup.fa > tree.nwk
     '''
 }
 
@@ -554,6 +554,8 @@ workflow {
     // check some params are in right form
     // params.is_segmented should be either Y or N
     TEST_DEPENDENCIES()
+
+    // check input params
     if( !(params.is_segmented in ['Y','N']) ){
         error("ERROR: params.is_segmented should be either Y or N")
     }
@@ -572,6 +574,8 @@ workflow {
     if( !params.gene_info ){
         error("ERROR: params.gene_info is required. Provide a gene_info TSV with columns: description, display_name, name, parent_name")
     }
+
+    // decide on run mode, update or initial run
 
     VALIDATE_REF_LIST(params.ref_list, params.is_segmented)
     def ref_list_file = file(params.ref_list)

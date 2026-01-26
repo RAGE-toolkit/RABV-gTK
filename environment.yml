@@ -17,6 +17,7 @@ dependencies:
   - seqkit=2.12.0
   - nextalign=2.14.0
   - nextflow=23.04.2
+  - veryfasttree=4.0.5
   
   # Utilities
   - requests=2.31.0
