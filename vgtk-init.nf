@@ -292,6 +292,18 @@ process SOFTWARE_VERSION {
     '''
 }
 
+process VERY_FAST_TREE{
+    input:
+        path padded_aln
+    output:
+        path "tree.nwk"
+    shell:
+    '''
+        seqkit rmdup !{padded_aln} -o !{padded_aln}_dedup.fa
+        !{projectDir}/bin/veryfasttree/VeryFastTree -threads 8 -nt -gtr -double-precision !{padded_aln}_dedup.fa > tree.nwk
+    '''
+}
+
 process GENERATE_TABLES {
     input:
         path gb_matrix
@@ -631,6 +643,8 @@ workflow {
     PAD_ALIGNMENT(NEXTALIGN_ALIGNMENT.out,
                   params.ref_list,
                   ref_list_file)
+    
+    VERY_FAST_TREE(PAD_ALIGNMENT.out.merged_msa)
     
     CALC_ALIGNMENT_CORD(PAD_ALIGNMENT.out.merged_msa, 
                         DOWNLOAD_GFF.out, 

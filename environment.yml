@@ -14,6 +14,7 @@ dependencies:
   # Bioinformatics (Conda-native)
   - biopython=1.81
   - blast=2.17.0
+  - seqkit=2.12.0
   - nextalign=2.14.0
   - nextflow=23.04.2
   
