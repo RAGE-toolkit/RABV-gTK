@@ -10,7 +10,7 @@ scripts_dir     = "${projectDir}/scripts"
 def scriptDefinedParams = [
     'tax_id', 'db_name', 'is_segmented', 'extra_info_fill', 'test',
     "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table", "is_flu", "gene_info",
-    "XML_source", "xml_dir",
+    "XML_source", "xml_dir", "update",
     // Add all parameter names defined above
 ]
 
@@ -65,6 +65,7 @@ process TEST_DEPENDENCIES{
     '''
 }
 
+
 process VALIDATE_REF_LIST{
     input:
         val ref_list
@@ -91,8 +92,13 @@ process FETCH_GENBANK{
     extra=""
     if( [ "!{params.test}" -eq "1" ] )
     then
-        extra="--test_run --ref_list !{ref_list}"
+        extra="${extra} --test_run --ref_list !{ref_list}"
     fi
+
+    if [ "!{params.update}" != "null" ] && [ -n "!{params.update}" ]; then
+        extra="${extra} --update !{params.update}"
+    fi
+
     python !{scripts_dir}/GenBankFetcher.py --taxid !{TAX_ID} -b 50 \
              ${extra} -e !{params.email} -o . 
     #--update tmp/GenBank-matrix/gB_matrix_raw.tsv is gonna be problematic for this!
@@ -293,6 +299,9 @@ process SOFTWARE_VERSION {
 }
 
 process VERY_FAST_TREE{
+    publishDir "${params.publish_dir}"
+    when: 
+        params.update == null
     input:
         path padded_aln
     output:
@@ -303,6 +312,20 @@ process VERY_FAST_TREE{
         VeryFastTree -threads 8 -nt -gtr -double-precision !{padded_aln}_dedup.fa > tree.nwk
     '''
 }
+
+// process USHER_TREE_placement{
+//     publishDir "${params.publish_dir}"
+//     when:
+//         params.update != null
+//     input:
+//         path padded_aln
+//     output:
+//         path "tree.nwk"
+//     shell:
+//     '''
+//         python !{scripts_dir}/UshER_Tree_Placement.py -a !{padded_aln} -o tree.nwk -b .
+//     '''
+// }
 
 process GENERATE_TABLES {
     input:
@@ -569,6 +592,21 @@ workflow {
         def xmlDirFile = file(params.xml_dir)
         if( !xmlDirFile.exists() || !xmlDirFile.isDirectory() ){
             error("ERROR: params.xml_dir must be an existing directory: ${params.xml_dir}")
+        }
+    }
+    
+    if( params.update ){
+        def updateFile = file(params.update)
+        if( !updateFile.exists() ){
+            error("ERROR: params.update file not found: ${params.update}")
+        }
+        def headerLine = updateFile.text.readLines().find { it?.trim() }
+        if( !headerLine ){
+            error("ERROR: params.update file is empty: ${params.update}")
+        }
+        def headerCols = headerLine.split('\t')
+        if( !headerCols.contains('primary_accession') ){
+            error("ERROR: params.update must be a TSV with header containing 'primary_accession'")
         }
     }
     if( !params.gene_info ){
