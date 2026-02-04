@@ -2,6 +2,7 @@ import os
 import csv
 import requests
 import time
+import random
 from time import sleep
 from os.path import join
 from argparse import ArgumentParser
@@ -100,7 +101,7 @@ class GenBankFetcher:
 		# Use a separate internal batch size just for efetch
 		batch_n = self.efetch_batch_size
 		if self.test_run:
-			ids=ids[:50]
+			ids = random.sample(ids, k=min(50, len(ids)))
 			batch_n=10
 
 		if self.ref_list:

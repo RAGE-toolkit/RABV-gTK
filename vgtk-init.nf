@@ -10,7 +10,8 @@ scripts_dir     = "${projectDir}/scripts"
 def scriptDefinedParams = [
     'tax_id', 'db_name', 'is_segmented', 'extra_info_fill', 'test',
     "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table", "is_flu", "gene_info",
-    "XML_source", "xml_dir", "update",
+    "XML_source", "xml_dir", "update", "update_file",
+    "mmseqs_min_seq_id", "mmseqs_threads", "mmseqs_trim_cds_file",
     // Add all parameter names defined above
 ]
 
@@ -26,6 +27,11 @@ def knownNextflowParams = [
 
 // 3. Combine allowed parameters
 def allowedParams = (scriptDefinedParams + knownNextflowParams).unique()
+
+// Backward-compatible alias: update_file -> update
+if( params.update_file && !params.update ){
+    params.update = params.update_file
+}
 
 // 4. Get all parameters provided via command line and config files
 //    The 'params' map holds the merged view of all parameters
@@ -262,6 +268,86 @@ process PAD_ALIGNMENT{
     '''
 }
 
+process MMSEQS_CLUSTERING{
+    publishDir "${params.publish_dir}"
+    input:
+        path padded_aln
+    output:
+        path "MMseqClusters_${padded_aln.baseName}", emit: mmseq_clusters
+    shell:
+    '''
+        mkdir -p mmseqs_input
+        cp !{padded_aln} mmseqs_input/
+
+        python !{scripts_dir}/MMseqsClustering.py \
+            -i mmseqs_input \
+            -o MMseqClusters_!{padded_aln.baseName} \
+            --min-seq-id !{params.mmseqs_min_seq_id} \
+            --threads !{params.mmseqs_threads}
+    '''
+}
+
+process IQ_TREE{
+    publishDir "${params.publish_dir}"
+    input:
+        path mmseq_cluster_dir
+    output:
+        path "IQTree_${mmseq_cluster_dir.baseName}", emit: iqtree_out
+    shell:
+    '''
+        CLUSTER_REP=$(find -L !{mmseq_cluster_dir} -name "*_cluster_rep.fasta" -print -quit)
+        if [ -z "$CLUSTER_REP" ]; then
+            echo "[error] No MMseqs centroid FASTA (*_cluster_rep.fasta) found in !{mmseq_cluster_dir}" >&2
+            exit 1
+        fi
+
+        mkdir -p IQTree_!{mmseq_cluster_dir.baseName}
+        iqtree2 -s "$CLUSTER_REP" -nt AUTO -m GTR -pre IQTree_!{mmseq_cluster_dir.baseName}/iqtree  -T !{params.mmseqs_threads}
+    '''
+}
+
+process USHER_PLACEMENT{
+    publishDir "${params.publish_dir}"
+    input:
+        path mmseq_cluster_dir
+        path iqtree_dir
+        path padded_aln
+    output:
+        path "Usher_${mmseq_cluster_dir.baseName}", emit: usher_out
+    shell:
+    '''
+        CLUSTER_REP=$(find -L !{mmseq_cluster_dir} -name "*_cluster_rep.fasta" -print -quit)
+        TREE_FILE=$(find -L !{iqtree_dir} -name "*.treefile" -print -quit)
+
+        if [ -z "$CLUSTER_REP" ] || [ -z "$TREE_FILE" ]; then
+            echo "[error] Missing MMseqs centroid FASTA or IQ-TREE treefile." >&2
+            echo "[error] centroid: $CLUSTER_REP" >&2
+            echo "[error] tree:     $TREE_FILE" >&2
+            exit 1
+        fi
+
+        REF_ID=$(seqkit seq -n "$CLUSTER_REP" | head -n 1)
+        if [ -z "$REF_ID" ]; then
+            echo "[error] Could not determine reference ID from centroid FASTA." >&2
+            exit 1
+        fi
+
+        mkdir -p Usher_!{mmseq_cluster_dir.baseName}
+        seqkit seq -n "$CLUSTER_REP" > Usher_!{mmseq_cluster_dir.baseName}/centroid_ids.txt
+        awk -v ref="$REF_ID" '$0 != ref' Usher_!{mmseq_cluster_dir.baseName}/centroid_ids.txt > Usher_!{mmseq_cluster_dir.baseName}/exclude_ids.txt
+
+        faToVcf -ref="$REF_ID" -excludeFile=Usher_!{mmseq_cluster_dir.baseName}/exclude_ids.txt \
+            "!{padded_aln}" Usher_!{mmseq_cluster_dir.baseName}/all_samples.vcf
+
+        usher \
+            -v Usher_!{mmseq_cluster_dir.baseName}/all_samples.vcf \
+            -t "$TREE_FILE" \
+            -d Usher_!{mmseq_cluster_dir.baseName} \
+            -o Usher_!{mmseq_cluster_dir.baseName}/usher.pb \
+            -C -u
+    '''
+}
+
 process CALC_ALIGNMENT_CORD {
     input:
         path padded_fasta
@@ -420,8 +506,6 @@ process PIVOT_TABLE_SEGMENTS{
         path "gB_matrix_pivoted_segments.tsv", emit: pivoted_matrix
     shell:
     '''
-
-
     python !{scripts_dir}/FluPivotTable.py \
         -g !{gb_matrix} \
         -o gB_matrix_pivoted_segments.tsv
@@ -685,6 +769,10 @@ workflow {
     PAD_ALIGNMENT(NEXTALIGN_ALIGNMENT.out,
                   params.ref_list,
                   ref_list_file)
+
+    MMSEQS_CLUSTERING(PAD_ALIGNMENT.out.merged_msa)
+    IQ_TREE(MMSEQS_CLUSTERING.out.mmseq_clusters)
+    USHER_PLACEMENT(MMSEQS_CLUSTERING.out.mmseq_clusters, IQ_TREE.out.iqtree_out, PAD_ALIGNMENT.out.merged_msa)
     
     VERY_FAST_TREE(PAD_ALIGNMENT.out.merged_msa)
     

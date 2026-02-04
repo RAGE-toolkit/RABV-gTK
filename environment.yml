@@ -16,8 +16,12 @@ dependencies:
   - blast=2.17.0
   - seqkit=2.12.0
   - nextalign=2.14.0
-  - nextflow=23.04.2
+  - nextflow=25.10.3
   - veryfasttree=4.0.5
+  - usher=0.6.6
+  - mmseqs2=18.8cc5c
+  - iqtree=3.0.1
+  - ucsc-fatovcf
   
   # Utilities
   - requests=2.31.0
