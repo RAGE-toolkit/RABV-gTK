@@ -399,19 +399,6 @@ process VERY_FAST_TREE{
     '''
 }
 
-// process USHER_TREE_placement{
-//     publishDir "${params.publish_dir}"
-//     when:
-//         params.update != null
-//     input:
-//         path padded_aln
-//     output:
-//         path "tree.nwk"
-//     shell:
-//     '''
-//         python !{scripts_dir}/UshER_Tree_Placement.py -a !{padded_aln} -o tree.nwk -b .
-//     '''
-// }
 
 process GENERATE_TABLES {
     input:
@@ -661,6 +648,16 @@ workflow {
     // check some params are in right form
     // params.is_segmented should be either Y or N
     TEST_DEPENDENCIES()
+
+    def missingParams = []
+    if( !params.tax_id ) missingParams << 'tax_id'
+    if( !params.db_name ) missingParams << 'db_name'
+    if( !params.ref_list ) missingParams << 'ref_list'
+    if( !params.gene_info ) missingParams << 'gene_info'
+    if( params.mmseqs_min_seq_id == null ) missingParams << 'mmseqs_min_seq_id'
+    if( missingParams ){
+        error("ERROR: Missing required parameter(s): ${missingParams.join(', ')}")
+    }
 
     // check input params
     if( !(params.is_segmented in ['Y','N']) ){
