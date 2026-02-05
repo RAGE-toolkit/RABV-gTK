@@ -13,7 +13,7 @@ from argparse import ArgumentParser
 from collections import defaultdict
 
 class CreateSqliteDB:
-	def __init__(self, meta_data, features, pad_aln, gene_info, m49_countries, m49_interm_region, m49_regions, m49_sub_regions, proj_settings, fasta_sequence_file, insertions, host_taxa_file, base_dir, output_dir, db_name, db_status):
+	def __init__(self, meta_data, features, pad_aln, gene_info, m49_countries, m49_interm_region, m49_regions, m49_sub_regions, proj_settings, fasta_sequence_file, insertions, host_taxa_file, base_dir, output_dir, db_name, db_status, tree_file=None, iqtree_file=None, usher_tree=None, cluster_tsv=None, cluster_min_seq_id=None, filtered_ids_file=None):
 		self.meta_data = meta_data
 		self.features = features
 		self.pad_aln = pad_aln
@@ -30,6 +30,62 @@ class CreateSqliteDB:
 		self.output_dir = output_dir
 		self.db_name = db_name
 		self.db_status = db_status
+		self.tree_file = tree_file
+		self.iqtree_file = iqtree_file
+		self.usher_tree = usher_tree
+		self.cluster_tsv = cluster_tsv
+		self.cluster_min_seq_id = cluster_min_seq_id
+		self.filtered_ids_file = filtered_ids_file
+
+	@staticmethod
+	def _read_tree_file(tree_path: str):
+		if not tree_path:
+			return None
+		try:
+			with open(tree_path, "r", encoding="utf-8") as handle:
+				return handle.read().strip()
+		except FileNotFoundError:
+			return None
+
+	def _load_filtered_ids(self) -> set:
+		"""Load the set of sequence IDs that were filtered during alignment."""
+		if not self.filtered_ids_file:
+			return set()
+		try:
+			with open(self.filtered_ids_file, "r", encoding="utf-8") as f:
+				return {line.strip() for line in f if line.strip()}
+		except FileNotFoundError:
+			return set()
+
+	def _add_cluster_column(self, df_meta_data: pd.DataFrame):
+		if not self.cluster_tsv:
+			return df_meta_data
+		try:
+			cluster_df = pd.read_csv(self.cluster_tsv, sep="\t", header=None, dtype=str)
+		except FileNotFoundError:
+			return df_meta_data
+
+		if cluster_df.shape[1] < 2:
+			return df_meta_data
+
+		cluster_df = cluster_df.iloc[:, :2]
+		cluster_df.columns = ["cluster_rep", "member"]
+		cluster_map = dict(zip(cluster_df["member"], cluster_df["cluster_rep"]))
+
+		try:
+			min_id = float(self.cluster_min_seq_id) if self.cluster_min_seq_id is not None else None
+		except (TypeError, ValueError):
+			min_id = None
+
+		if min_id is not None:
+			pct = int(round(min_id * 100))
+			col_name = f"cluster_{pct}pct"
+		else:
+			col_name = "cluster"
+
+		if "primary_accession" in df_meta_data.columns:
+			df_meta_data[col_name] = df_meta_data["primary_accession"].map(cluster_map)
+		return df_meta_data
 
 	def load_fasta(self):
 		fasta_data = []
@@ -51,7 +107,23 @@ class CreateSqliteDB:
 	def create_db(self):
 		output_dir = join(self.base_dir, self.output_dir)
 		os.makedirs(output_dir, exist_ok=True)
+		
+		# Load filtered sequence IDs to exclude
+		filtered_ids = self._load_filtered_ids()
+		if filtered_ids:
+			print(f"[CreateSqliteDB] Excluding {len(filtered_ids)} filtered sequences from DB")
+		
 		df_meta_data = pd.read_csv(join(self.meta_data), sep="\t", dtype=str)
+		
+		# Exclude filtered sequences from meta_data
+		if filtered_ids and "primary_accession" in df_meta_data.columns:
+			before_count = len(df_meta_data)
+			df_meta_data = df_meta_data[~df_meta_data["primary_accession"].isin(filtered_ids)]
+			after_count = len(df_meta_data)
+			if before_count != after_count:
+				print(f"[CreateSqliteDB] Removed {before_count - after_count} filtered sequences from meta_data")
+		
+		df_meta_data = self._add_cluster_column(df_meta_data)
 		df_features = pd.read_csv(join(self.features), sep="\t")
 		df_aln = pd.read_csv(join(self.pad_aln), sep="\t")
 		df_gene = pd.read_csv(join(self.gene_info), sep="\t")
@@ -93,9 +165,22 @@ class CreateSqliteDB:
 		cursor.execute("""CREATE TABLE IF NOT EXISTS insertions AS SELECT * FROM insertions;""")
 		cursor.execute("""CREATE TABLE IF NOT EXISTS host_taxa AS SELECT * FROM host_taxa;""")
 
+		cursor.execute("""CREATE TABLE IF NOT EXISTS trees (name TEXT, source TEXT, newick TEXT, created_at TEXT);""")
+		now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+		for name, source, tree_path in [
+			("veryfasttree", "veryfasttree", self.tree_file),
+			("iqtree", "iqtree", self.iqtree_file),
+			("usher", "usher", self.usher_tree),
+		]:
+			newick = self._read_tree_file(tree_path)
+			if newick:
+				cursor.execute(
+					"INSERT INTO trees (name, source, newick, created_at) VALUES (?, ?, ?, ?)",
+					(name, source, newick, now_str),
+				)
+
 		cursor.execute("""CREATE TABLE IF NOT EXISTS info (creation_type TEXT,date TEXT);""")
 		creation_type = self._normalize_db_status(self.db_status)
-		now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 		info_df = pd.DataFrame([{"creation_type": creation_type, "date": now_str}])
 		info_df.to_sql("info", conn, if_exists="append", index=False)
@@ -121,6 +206,12 @@ def process(args):
 			args.output_dir,
 			args.db_name,
 			args.db_status,
+			args.tree_file,
+			args.iqtree_file,
+			args.usher_tree,
+			args.cluster_tsv,
+			args.cluster_min_seq_id,
+			args.filtered_ids,
 		)
 	db_creator.create_db()
 
@@ -144,6 +235,12 @@ if __name__ == "__main__":
 	parser.add_argument('-ht', '--host_taxa_file', help='Host Taxanomy file', default="tmp/HostTaxa/Host_taxa.tsv")
 	parser.add_argument('-d', '--db_name', help='Name of the Sqlite database', default="gdb")
 	parser.add_argument('-ds', '--db_status', help='Database status: "new db" (default) or "last modified"/"last updated". Determines info.creation_type.',default="new db")
+	parser.add_argument('-t', '--tree_file', help='VeryFastTree Newick file', default=None)
+	parser.add_argument('-it', '--iqtree_file', help='IQ-TREE Newick file', default=None)
+	parser.add_argument('-ut', '--usher_tree', help='UShER output Newick file', default=None)
+	parser.add_argument('-ct', '--cluster_tsv', help='MMseqs clustering TSV (rep\tmember)', default=None)
+	parser.add_argument('-ci', '--cluster_min_seq_id', help='MMseqs min sequence identity used for clustering', default=None)
+	parser.add_argument('-fi', '--filtered_ids', help='File with filtered sequence IDs (one per line) to exclude from DB', default=None)
 
 	args = parser.parse_args()
 

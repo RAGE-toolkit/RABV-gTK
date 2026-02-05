@@ -268,6 +268,34 @@ process PAD_ALIGNMENT{
     '''
 }
 
+process COLLECT_FILTERED_SEQUENCES {
+    publishDir "${params.publish_dir}"
+    input:
+        path nextalign_dir
+    output:
+        path "filtered_sequences.tsv", emit: filtered_tsv
+        path "filtered_sequences_ids.txt", emit: filtered_ids
+    shell:
+    '''
+    python !{scripts_dir}/CollectFilteredSequences.py \
+        -n !{nextalign_dir} \
+        -o filtered_sequences.tsv \
+        -b .
+    '''
+}
+
+process DEDUP_ALIGNMENT{
+    publishDir "${params.publish_dir}"
+    input:
+        path padded_aln
+    output:
+        path "${padded_aln.baseName}_dedup.fasta", emit: dedup_msa
+    shell:
+    '''
+        seqkit rmdup -n !{padded_aln} -o !{padded_aln.baseName}_dedup.fasta
+    '''
+}
+
 process MMSEQS_CLUSTERING{
     publishDir "${params.publish_dir}"
     input:
@@ -429,10 +457,39 @@ process CREATE_SQLITE_DB {
         path host_taxa
         path software_info
         path fasta_sequences
+        path iqtree_dir
+        path mmseq_cluster_dir
+        path usher_dir
+        path filtered_ids
     output:
         path "${params.db_name}.db"
     shell:
     '''
+    IQTREE_FILE=$(find -L !{iqtree_dir} -name "*.treefile" -print -quit || true)
+    CLUSTER_TSV=$(find -L !{mmseq_cluster_dir} -name "*_clusters.tsv" -print -quit || true)
+    USHER_FILE=$(find -L !{usher_dir} -name "final-tree.nh" -print -quit || true)
+    if [ -z "$USHER_FILE" ]; then
+        USHER_FILE=$(find -L !{usher_dir} -name "uncondensed-final-tree.nh" -print -quit || true)
+    fi
+    echo "Using IQ-TREE file: $IQTREE_FILE ; MMseqs cluster TSV: $CLUSTER_TSV ; USHER file: $USHER_FILE"
+    IQTREE_ARG=""
+    CLUSTER_ARG=""
+    USHER_ARG=""
+    FILTERED_ARG=""
+    if [ -n "$IQTREE_FILE" ] && [ -f "$IQTREE_FILE" ]; then
+        IQTREE_ARG="-it $IQTREE_FILE"
+    fi
+    if [ -n "$CLUSTER_TSV" ] && [ -f "$CLUSTER_TSV" ]; then
+        CLUSTER_ARG="-ct $CLUSTER_TSV -ci !{params.mmseqs_min_seq_id}"
+    fi
+    if [ -n "$USHER_FILE" ] && [ -f "$USHER_FILE" ]; then
+        USHER_ARG="-ut $USHER_FILE"
+    fi
+    if [ -f "!{filtered_ids}" ] && [ -s "!{filtered_ids}" ]; then
+        FILTERED_ARG="-fi !{filtered_ids}"
+        echo "Excluding $(wc -l < !{filtered_ids}) filtered sequences from DB"
+    fi
+
     python !{scripts_dir}/CreateSqliteDB.py -m !{meta_data} \
     -rf !{features} -p !{sequence_alignment} \
     -i !{insertions} -ht !{host_taxa} \
@@ -442,8 +499,25 @@ process CREATE_SQLITE_DB {
     -mir !{projectDir}/assets/m49_intermediate_region.csv \
     -mr !{projectDir}/assets/m49_region.csv \
     -msr !{projectDir}/assets/m49_sub_region.csv \
-    -d !{params.db_name} -b . -o .
+    -d !{params.db_name} -b . -o . ${IQTREE_ARG} ${USHER_ARG} ${CLUSTER_ARG} ${FILTERED_ARG}
     # need to make gene info come from gff file rather than hardcoded rabv one
+    '''
+}
+
+process TEST_DB_VALIDATION {
+    publishDir "${params.publish_dir}/tests"
+    when:
+        params.test == "1"
+    input:
+        path sqlite_db
+    output:
+        path "db_tree_validation.txt"
+        path "db_tree.png"
+    shell:
+    '''
+    python !{scripts_dir}/ValidateDbTree.py \
+        --db !{sqlite_db} \
+        --outdir .
     '''
 }
 
@@ -766,12 +840,16 @@ workflow {
     PAD_ALIGNMENT(NEXTALIGN_ALIGNMENT.out,
                   params.ref_list,
                   ref_list_file)
-
-    MMSEQS_CLUSTERING(PAD_ALIGNMENT.out.merged_msa)
-    IQ_TREE(MMSEQS_CLUSTERING.out.mmseq_clusters)
-    USHER_PLACEMENT(MMSEQS_CLUSTERING.out.mmseq_clusters, IQ_TREE.out.iqtree_out, PAD_ALIGNMENT.out.merged_msa)
     
-    VERY_FAST_TREE(PAD_ALIGNMENT.out.merged_msa)
+    // Collect sequences that were filtered during nextalign alignment
+    COLLECT_FILTERED_SEQUENCES(NEXTALIGN_ALIGNMENT.out)
+
+    DEDUP_ALIGNMENT(PAD_ALIGNMENT.out.merged_msa)
+    MMSEQS_CLUSTERING(DEDUP_ALIGNMENT.out.dedup_msa)
+    IQ_TREE(MMSEQS_CLUSTERING.out.mmseq_clusters)
+    USHER_PLACEMENT(MMSEQS_CLUSTERING.out.mmseq_clusters, IQ_TREE.out.iqtree_out, DEDUP_ALIGNMENT.out.dedup_msa)
+    
+    // VERY_FAST_TREE(PAD_ALIGNMENT.out.merged_msa)
     
     CALC_ALIGNMENT_CORD(PAD_ALIGNMENT.out.merged_msa, 
                         DOWNLOAD_GFF.out, 
@@ -794,8 +872,14 @@ workflow {
                      GENERATE_TABLES.out.insertions, 
                      GENERATE_TABLES.out.host_taxa, 
                      SOFTWARE_VERSION.out.software_info, 
-                     GENBANK_PARSER.out.sequences_out
+                     GENBANK_PARSER.out.sequences_out,
+                     IQ_TREE.out.iqtree_out,
+                     MMSEQS_CLUSTERING.out.mmseq_clusters,
+                     USHER_PLACEMENT.out.usher_out,
+                     COLLECT_FILTERED_SEQUENCES.out.filtered_ids
                      )
+
+    TEST_DB_VALIDATION(CREATE_SQLITE_DB.out)
 }
 
 

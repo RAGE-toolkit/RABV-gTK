@@ -318,7 +318,8 @@ class GenBankParser:
 			count+=1
 
 		df = pd.DataFrame(merged_data)
-		df = df.drop_duplicates(subset='locus', keep="last")
+  		# this was subsetting on locus-??
+		df = df.drop_duplicates(subset='primary_accession', keep="last")
 		with open(join(self.base_dir, self.output_dir, "sequences.fa"), "w") as fasta_file:
 			for _, row in df.iterrows():
 				fasta_file.write(f">{row['primary_accession']}\n{row['sequence']}\n")
