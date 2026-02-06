@@ -17,17 +17,23 @@ if df.shape[1] < 2:
 if params.is_segmented == 'Y' and df.shape[1] < 3:
     raise ValueError("For segmented data, reference list must contain three columns: accession, master/reference indicator, and segment.")
 
-# check master/reference column contains only 'master' or 'reference'
-valid_indicators = {'master', 'reference'}
+# check master/reference column contains only 'master', 'reference', or 'exclusion_list'
+valid_indicators = {'master', 'reference', 'exclusion_list'}
 if not df[1].isin(valid_indicators).all():
-    raise ValueError("Master/reference indicator column must contain only 'master' or 'reference' values.")
+    invalid = set(df[1].unique()) - valid_indicators
+    raise ValueError(f"Indicator column contains invalid values: {invalid}. Allowed: {valid_indicators}")
 
-# check for each unique segment value there's a master
+# check for each unique segment value there's a master (unless it's an exclusion-only segment)
 if params.is_segmented == 'Y':
     for segment in df[2].unique():
         segment_df = df[df[2] == segment]
+        segment_types = set(segment_df[1].values)
+        # Segments that only contain exclusion_list entries don't need a master
+        if segment_types == {'exclusion_list'}:
+            print(f"Segment '{segment}' is an exclusion-only segment (all entries are exclusion_list). Skipping master check.")
+            continue
         if 'master' not in segment_df[1].values:
-            raise ValueError(f"No master found for segment '{segment}'. Each segment must have one master entry.")
+            raise ValueError(f"No master found for segment '{segment}'. Each non-exclusion segment must have one master entry.")
 
 print("Reference list validation passed.")
 if params.output:

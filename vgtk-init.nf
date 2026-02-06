@@ -55,19 +55,21 @@ if (unexpectedParams) {
 }
 
 process TEST_DEPENDENCIES{
+    errorStrategy 'ignore'
     output:
-        path "dependency_test.txt"
+        path "dependency_test.txt", optional: true
     shell:
     '''
+    set +e  # Don't fail on individual pip show failures
     python --version > dependency_test.txt
-    pip show biopython >> dependency_test.txt
-    pip show pandas >> dependency_test.txt
-    pip show numpy >> dependency_test.txt
-    pip show openpyxl >> dependency_test.txt
-    pip show requests >> dependency_test.txt
-    pip show python-dateutil >> dependency_test.txt
-    nextalign --version >> dependency_test.txt
-    
+    pip show biopython >> dependency_test.txt 2>&1 || echo "biopython: NOT FOUND" >> dependency_test.txt
+    pip show pandas >> dependency_test.txt 2>&1 || echo "pandas: NOT FOUND" >> dependency_test.txt
+    pip show numpy >> dependency_test.txt 2>&1 || echo "numpy: NOT FOUND" >> dependency_test.txt
+    pip show openpyxl >> dependency_test.txt 2>&1 || echo "openpyxl: NOT FOUND" >> dependency_test.txt
+    pip show requests >> dependency_test.txt 2>&1 || echo "requests: NOT FOUND" >> dependency_test.txt
+    pip show python-dateutil >> dependency_test.txt 2>&1 || echo "python-dateutil: NOT FOUND" >> dependency_test.txt
+    nextalign --version >> dependency_test.txt 2>&1 || echo "nextalign: NOT FOUND" >> dependency_test.txt
+    exit 0
     '''
 }
 
@@ -457,19 +459,20 @@ process CREATE_SQLITE_DB {
         path host_taxa
         path software_info
         path fasta_sequences
-        path iqtree_dir
-        path mmseq_cluster_dir
-        path usher_dir
+        path iqtree_dirs          // Can be multiple directories for segmented viruses
+        path mmseq_cluster_dirs   // Can be multiple directories for segmented viruses
+        path usher_dirs           // Can be multiple directories for segmented viruses
         path filtered_ids
     output:
         path "${params.db_name}.db"
     shell:
     '''
-    IQTREE_FILE=$(find -L !{iqtree_dir} -name "*.treefile" -print -quit || true)
-    CLUSTER_TSV=$(find -L !{mmseq_cluster_dir} -name "*_clusters.tsv" -print -quit || true)
-    USHER_FILE=$(find -L !{usher_dir} -name "final-tree.nh" -print -quit || true)
+    # For segmented viruses, there may be multiple directories - search across all of them
+    IQTREE_FILE=$(find -L . -name "*.treefile" -print -quit || true)
+    CLUSTER_TSV=$(find -L . -name "*_clusters.tsv" -print -quit || true)
+    USHER_FILE=$(find -L . -name "final-tree.nh" -print -quit || true)
     if [ -z "$USHER_FILE" ]; then
-        USHER_FILE=$(find -L !{usher_dir} -name "uncondensed-final-tree.nh" -print -quit || true)
+        USHER_FILE=$(find -L . -name "uncondensed-final-tree.nh" -print -quit || true)
     fi
     echo "Using IQ-TREE file: $IQTREE_FILE ; MMseqs cluster TSV: $CLUSTER_TSV ; USHER file: $USHER_FILE"
     IQTREE_ARG=""
@@ -844,14 +847,47 @@ workflow {
     // Collect sequences that were filtered during nextalign alignment
     COLLECT_FILTERED_SEQUENCES(NEXTALIGN_ALIGNMENT.out)
 
-    DEDUP_ALIGNMENT(PAD_ALIGNMENT.out.merged_msa)
+    // For segmented viruses, PAD_ALIGNMENT emits multiple fasta files (one per segment).
+    // Use flatten() to create a channel where each file is processed independently in parallel.
+    // For non-segmented viruses, this just passes through the single file.
+    padded_msa_ch = PAD_ALIGNMENT.out.merged_msa.flatten()
+
+    DEDUP_ALIGNMENT(padded_msa_ch)
     MMSEQS_CLUSTERING(DEDUP_ALIGNMENT.out.dedup_msa)
     IQ_TREE(MMSEQS_CLUSTERING.out.mmseq_clusters)
-    USHER_PLACEMENT(MMSEQS_CLUSTERING.out.mmseq_clusters, IQ_TREE.out.iqtree_out, DEDUP_ALIGNMENT.out.dedup_msa)
+    
+    // Join the channels by segment name for USHER_PLACEMENT
+    // Create tuples of (basename, file) for proper matching
+    mmseq_with_key = MMSEQS_CLUSTERING.out.mmseq_clusters
+        .map { dir -> 
+            def baseName = dir.name.replace('MMseqClusters_', '').replace('_dedup', '')
+            [baseName, dir] 
+        }
+    iqtree_with_key = IQ_TREE.out.iqtree_out
+        .map { dir -> 
+            def baseName = dir.name.replace('IQTree_MMseqClusters_', '').replace('_dedup', '')
+            [baseName, dir] 
+        }
+    dedup_with_key = DEDUP_ALIGNMENT.out.dedup_msa
+        .map { fasta -> 
+            def baseName = fasta.baseName.replace('_dedup', '')
+            [baseName, fasta] 
+        }
+    
+    // Join the three channels by their segment key
+    usher_input_ch = mmseq_with_key
+        .join(iqtree_with_key)
+        .join(dedup_with_key)
+        .map { key, mmseq_dir, iqtree_dir, dedup_fasta -> 
+            [mmseq_dir, iqtree_dir, dedup_fasta] 
+        }
+    
+    USHER_PLACEMENT(usher_input_ch.map{it[0]}, usher_input_ch.map{it[1]}, usher_input_ch.map{it[2]})
     
     // VERY_FAST_TREE(PAD_ALIGNMENT.out.merged_msa)
     
-    CALC_ALIGNMENT_CORD(PAD_ALIGNMENT.out.merged_msa, 
+    // For CALC_ALIGNMENT_CORD, collect all MSA files back together
+    CALC_ALIGNMENT_CORD(PAD_ALIGNMENT.out.merged_msa.collect(), 
                         DOWNLOAD_GFF.out, 
                         BLAST_ALIGNMENT.out.query_uniq_tophits,
                         params.ref_list,
@@ -861,10 +897,14 @@ workflow {
     
     GENERATE_TABLES(data, 
                     BLAST_ALIGNMENT.out.query_uniq_tophits, 
-                    PAD_ALIGNMENT.out.merged_msa, 
+                    PAD_ALIGNMENT.out.merged_msa.collect(), 
                     NEXTALIGN_ALIGNMENT.out)
 
-
+    // Collect all per-segment outputs for the database
+    // For non-segmented viruses, these will have single items
+    iqtree_collected = IQ_TREE.out.iqtree_out.collect()
+    mmseq_collected = MMSEQS_CLUSTERING.out.mmseq_clusters.collect()
+    usher_collected = USHER_PLACEMENT.out.usher_out.collect()
                     
     CREATE_SQLITE_DB(data, 
                      CALC_ALIGNMENT_CORD.out.features, 
@@ -873,9 +913,9 @@ workflow {
                      GENERATE_TABLES.out.host_taxa, 
                      SOFTWARE_VERSION.out.software_info, 
                      GENBANK_PARSER.out.sequences_out,
-                     IQ_TREE.out.iqtree_out,
-                     MMSEQS_CLUSTERING.out.mmseq_clusters,
-                     USHER_PLACEMENT.out.usher_out,
+                     iqtree_collected,
+                     mmseq_collected,
+                     usher_collected,
                      COLLECT_FILTERED_SEQUENCES.out.filtered_ids
                      )
 

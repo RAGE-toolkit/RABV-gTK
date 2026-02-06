@@ -43,20 +43,25 @@ class FilterAndExtractSequences:
 		return ref_list
 
 	def read_ref_list_segmented_virus(self):
-		ref_list = []
+		"""Return a dict {accession: type} where type is master/reference/exclusion_list."""
+		ref_list = {}
 		with open(self.ref_file) as f:
 			for each_ref_line in f:
 				line = each_ref_line.strip()
 				if not line: continue
 				
 				if '\t' in line:
-					acc = line.split('\t')[0]
+					parts = line.split('\t')
+					acc = parts[0].strip()
+					acc_type = parts[1].strip() if len(parts) > 1 else 'reference'
 				elif '|' in line:
-					acc = line.split("|")[0]
+					acc = line.split("|")[0].strip()
+					acc_type = 'reference'
 				else:
-					acc = line
+					acc = line.strip()
+					acc_type = 'reference'
 				
-				ref_list.append(acc.strip())
+				ref_list[acc] = acc_type
 		return ref_list
 
 	def check_gb_division(self):
@@ -74,10 +79,22 @@ class FilterAndExtractSequences:
 		sequence_dict = self.fasta_to_dict()
 		exclusion_dict = {}
 	
+		# Both methods now return dict {accession: type}
 		if self.segmented_virus == "Y":
 			ref_list = self.read_ref_list_segmented_virus()
 		else:
 			ref_list = self.read_ref_list()
+
+		# Identify which refs are exclusion_list type
+		exclusion_list_refs = {acc for acc, acc_type in ref_list.items() 
+			if acc_type.strip().lower() == 'exclusion_list'}
+		if exclusion_list_refs:
+			print(f"Found {len(exclusion_list_refs)} exclusion_list references: {', '.join(sorted(exclusion_list_refs))}")
+			# Write exclusion ref list for downstream use by BlastAlignment
+			exclusion_refs_file = join(self.base_dir, self.output_dir, 'exclusion_refs.txt')
+			with open(exclusion_refs_file, 'w') as ef:
+				for acc in sorted(exclusion_list_refs):
+					ef.write(f"{acc}\n")
 
 		query_seq_file = join(self.base_dir, self.output_dir, 'query_seq.fa')
 		ref_seq_file = join(self.base_dir, self.output_dir, 'ref_seq.fa')
