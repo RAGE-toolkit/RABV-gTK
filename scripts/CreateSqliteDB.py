@@ -108,10 +108,14 @@ class CreateSqliteDB:
 		output_dir = join(self.base_dir, self.output_dir)
 		os.makedirs(output_dir, exist_ok=True)
 		
+		excluded_records = []
+
 		# Load filtered sequence IDs to exclude
 		filtered_ids = self._load_filtered_ids()
 		if filtered_ids:
 			print(f"[CreateSqliteDB] Excluding {len(filtered_ids)} filtered sequences from DB")
+			for fid in filtered_ids:
+				excluded_records.append({"primary_accession": fid, "reason": "alignment_filtering"})
 		
 		df_meta_data = pd.read_csv(join(self.meta_data), sep="\t", dtype=str)
 		
@@ -123,6 +127,22 @@ class CreateSqliteDB:
 			if before_count != after_count:
 				print(f"[CreateSqliteDB] Removed {before_count - after_count} filtered sequences from meta_data")
 		
+		# Collect exclusions from meta_data (e.g. invalid division)
+		if "exclusion" in df_meta_data.columns:
+			# Find rows with non-empty exclusion
+			exclusion_mask = df_meta_data["exclusion"].notna() & (df_meta_data["exclusion"] != "")
+			excluded_rows = df_meta_data[exclusion_mask]
+			
+			if not excluded_rows.empty:
+				print(f"[CreateSqliteDB] Found {len(excluded_rows)} rows with exclusions in meta_data")
+				for _, row in excluded_rows.iterrows():
+					acc = row.get("primary_accession", "")
+					if acc:
+						excluded_records.append({"primary_accession": acc, "reason": row["exclusion"]})
+				
+				# Remove them from main meta_data
+				df_meta_data = df_meta_data[~exclusion_mask]
+
 		df_meta_data = self._add_cluster_column(df_meta_data)
 		df_features = pd.read_csv(join(self.features), sep="\t")
 		df_aln = pd.read_csv(join(self.pad_aln), sep="\t")
@@ -150,6 +170,15 @@ class CreateSqliteDB:
 		df_fasta_sequences.to_sql("sequences", conn, if_exists="replace", index=False)
 		df_insertions.to_sql("insertions", conn, if_exists="replace", index=False)
 		df_host_taxa.to_sql("host_taxa", conn, if_exists="replace", index=False)
+		
+		if excluded_records:
+			df_excluded = pd.DataFrame(excluded_records)
+			df_excluded = df_excluded.drop_duplicates(subset=["primary_accession"])
+			df_excluded.to_sql("excluded_accessions", conn, if_exists="replace", index=False)
+			print(f"[CreateSqliteDB] Created excluded_accessions table with {len(df_excluded)} records")
+		else:
+			cursor.execute("CREATE TABLE IF NOT EXISTS excluded_accessions (primary_accession TEXT, reason TEXT)")
+
 		cursor.execute("PRAGMA foreign_keys = ON;")
 
 		cursor.execute("""CREATE TABLE IF NOT EXISTS meta_data AS SELECT * FROM meta_data;""")
@@ -164,6 +193,7 @@ class CreateSqliteDB:
 		cursor.execute("""CREATE TABLE IF NOT EXISTS sequences AS SELECT * FROM sequences;""")
 		cursor.execute("""CREATE TABLE IF NOT EXISTS insertions AS SELECT * FROM insertions;""")
 		cursor.execute("""CREATE TABLE IF NOT EXISTS host_taxa AS SELECT * FROM host_taxa;""")
+		cursor.execute("""CREATE TABLE IF NOT EXISTS excluded_accessions AS SELECT * FROM excluded_accessions;""")
 
 		cursor.execute("""CREATE TABLE IF NOT EXISTS trees (name TEXT, source TEXT, newick TEXT, created_at TEXT);""")
 		now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

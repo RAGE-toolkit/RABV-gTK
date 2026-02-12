@@ -10,8 +10,9 @@ scripts_dir     = "${projectDir}/scripts"
 def scriptDefinedParams = [
     'tax_id', 'db_name', 'is_segmented', 'extra_info_fill', 'test',
     "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table", "is_flu", "gene_info",
-    "XML_source", "xml_dir", "update", "update_file",
+    "xml_dir", "update", "update_file",
     "mmseqs_min_seq_id", "mmseqs_threads", "mmseqs_trim_cds_file",
+    "gisaid_dir", "previous_db"
     // Add all parameter names defined above
 ]
 
@@ -143,15 +144,28 @@ process GENBANK_PARSER{
         path "sequences.fa", emit: sequences_out
     shell:
     '''
+        echo "DEBUG: params.test is '!{params.test}'"
+        echo "DEBUG: params.xml_dir is '!{params.xml_dir}'"
+        
         # force re-run after update
-        extra="--require_refs"
-        if( [ "!{params.XML_source}" = "XML" ] )
-        then
-            if( [ "!{params.test}" -eq "1" ] )
-            then
+        extra=""
+        # Only require refs if NOT in test mode (explicit string match)
+        if [ "!{params.test}" != "1" ]; then
+             echo "DEBUG: Setting require_refs = true"
+             extra="--require_refs"
+        else
+             echo "DEBUG: Test mode detected, skipping require_refs"
+        fi
+
+        # Logic: If xml_dir is provided (mimicking old XML_source=XML), apply test flags if needed
+        if [ -n "!{params.xml_dir}" ] && [ "!{params.xml_dir}" != "null" ]; then
+            if [ "!{params.test}" -eq "1" ]; then
                 extra="${extra} --test_run"
             fi
         fi
+        
+        echo "DEBUG: Final extra args: ${extra}"
+        
         python !{scripts_dir}/GenBankParser.py -r !{ref_list_path} -d !{gen_bank_XML} -o . -b . ${extra}
         python !{scripts_dir}/ValidateMatrix.py -o . -a !{projectDir}/assets -b . \
         -g gB_matrix_raw.tsv \
@@ -160,6 +174,60 @@ process GENBANK_PARSER{
         
     '''
 }
+
+process TIDY_GISAID {
+    input:
+       path gisaid_dir
+       path db_file
+    output:
+       path "metadata.tsv", emit: gisaid_meta
+       path "all_nuc.fas", emit: gisaid_nuc
+    shell:
+       '''
+       db_arg=""
+       # Check if db_file is a valid file (not a directory or empty placeholder)
+       if [ -f "!{db_file}" ]; then
+           db_arg="--db_file !{db_file}"
+       fi
+
+       extra_args=""
+       if [ "!{params.test}" = "1" ]; then
+           extra_args="--test"
+       fi
+
+       # Default to tsv if no xls/xlsx found, logic handled largely by glob inside but the arg switches mode
+       # To make it robust we could check, but for now assuming tsv as per GISAID standard downloads
+       python !{scripts_dir}/gisaid_tidy.py --data_dir !{gisaid_dir} --output_dir . --filetype tsv $db_arg $extra_args
+       '''
+}
+
+process MERGE_GISAID {
+    input:
+       path gb_matrix
+       path gisaid_meta
+       path gisaid_nuc
+    output:
+       path "gB_matrix_merged.tsv", emit: merged_matrix
+    shell:
+       '''
+       python !{scripts_dir}/merge_into_gB_matrix.py -g !{gb_matrix} \
+           -t !{gisaid_meta} -f !{gisaid_nuc} -o gB_matrix_merged.tsv \
+           -k Segment_Id --dataset_source gisaid
+       '''
+}
+
+process CAT_FASTA {
+    input:
+        path fa1
+        path fa2
+    output:
+        path "combined_sequences.fa", emit: combined_fa
+    shell:
+        '''
+        cat !{fa1} !{fa2} > combined_sequences.fa
+        '''
+}
+
 process ADD_MISSING_DATA{
     input:
         path gen_bank_table
@@ -740,13 +808,8 @@ workflow {
     if( !(params.is_segmented in ['Y','N']) ){
         error("ERROR: params.is_segmented should be either Y or N")
     }
-    if( !(params.XML_source in ['Genbank','XML']) ){
-        error("ERROR: params.XML_source should be either Genbank or XML")
-    }
-    if( params.XML_source == 'XML' ){
-        if( !params.xml_dir ){
-            error("ERROR: params.xml_dir is required when params.XML_source=XML")
-        }
+
+    if( params.xml_dir ){
         def xmlDirFile = file(params.xml_dir)
         if( !xmlDirFile.exists() || !xmlDirFile.isDirectory() ){
             error("ERROR: params.xml_dir must be an existing directory: ${params.xml_dir}")
@@ -776,25 +839,41 @@ workflow {
     VALIDATE_REF_LIST(params.ref_list, params.is_segmented)
     def ref_list_file = file(params.ref_list)
     def genbank_xml_dir
-    if( params.XML_source == 'Genbank' ){
+    
+    // Logic: If xml_dir is provided, use it. Otherwise fetch from GenBank.
+    if( params.xml_dir ){
+        genbank_xml_dir = file(params.xml_dir)
+    } else {
         FETCH_GENBANK(params.tax_id, ref_list_file)
         genbank_xml_dir = FETCH_GENBANK.out.gen_bank_XML
-    } else {
-        genbank_xml_dir = file(params.xml_dir)
     }
 
     DOWNLOAD_GFF(params.ref_list, ref_list_file)
 
     GENBANK_PARSER(params.ref_list, genbank_xml_dir)
 
+    def gb_matrix_ch = GENBANK_PARSER.out.gb_matrix
+    def gb_seqs_ch = GENBANK_PARSER.out.sequences_out
+
+    if (params.gisaid_dir) {
+         def db_in = params.previous_db ? file(params.previous_db) : file(params.scripts_dir)
+         TIDY_GISAID(params.gisaid_dir, db_in)
+         
+         MERGE_GISAID(gb_matrix_ch, TIDY_GISAID.out.gisaid_meta, TIDY_GISAID.out.gisaid_nuc)
+         gb_matrix_ch = MERGE_GISAID.out.merged_matrix
+         
+         CAT_FASTA(gb_seqs_ch, TIDY_GISAID.out.gisaid_nuc)
+         gb_seqs_ch = CAT_FASTA.out.combined_fa
+    }
+
     if(params.extra_info_fill){
-        data=ADD_MISSING_DATA(GENBANK_PARSER.out.gb_matrix)
+        data=ADD_MISSING_DATA(gb_matrix_ch)
     }else{
-        data=GENBANK_PARSER.out.gb_matrix
+        data=gb_matrix_ch
     }
 
     FILTER_AND_EXTRACT(data, 
-                        GENBANK_PARSER.out.sequences_out)
+                        gb_seqs_ch)
 
     BLAST_ALIGNMENT(FILTER_AND_EXTRACT.out.query_seqs_out,
                     FILTER_AND_EXTRACT.out.ref_seqs_out,
