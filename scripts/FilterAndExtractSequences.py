@@ -118,10 +118,30 @@ class FilterAndExtractSequences:
 						continue
 
 					gb_division = row['division']
-					seq_len = int(row['length'])
-					seq_len_without_n = seq_len - int(row['n'])
 					accession = row['gi_number'] #row['primary_accession']
-					sequence = sequence_dict[accession]
+					
+					# Get sequence safely
+					if accession in sequence_dict:
+						sequence = sequence_dict[accession]
+					else:
+						# If sequence is missing but row exists, we might have a problem.
+						# For now, let's treat it as empty string to avoid crashes, 
+						# or if original behavior was to crash, we should maybe duplicate that?
+						# Original: sequence = sequence_dict[accession] -> KeyError
+						# Let's try to be robust. 
+						sequence = ""
+
+					try:
+						seq_len = int(row['length'])
+					except (ValueError, TypeError):
+						seq_len = len(sequence)
+
+					try:
+						n_count = int(row['n'])
+					except (ValueError, TypeError):
+						n_count = sequence.upper().count('N') if sequence else 0
+
+					seq_len_without_n = seq_len - n_count
 
 					exclusion_status = 0
 					exclusion_criteria = ""

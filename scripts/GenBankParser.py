@@ -271,16 +271,30 @@ class GenBankParser:
 		missing_refs = sorted(list(ref_set - found_refs))
 		return ref_xml_files, missing_refs
 
-	def select_xml_files(self, ref_accessions, xml_files):
+	def select_xml_files(self, ref_seq_dict, xml_files):
 		if not self.test_run:
 			return xml_files
 
 		if self.test_xml_limit <= 0:
 			return []
 
+		ref_accessions = list(ref_seq_dict.keys())
 		ref_xml_files, missing_refs = self.find_ref_xml_files(ref_accessions, xml_files)
+		
+		# Check if any missing refs are CRITICAL (master/reference). 
+		# We can tolerate missing exclusion_list refs.
 		if self.require_refs and missing_refs:
-			raise ValueError(f"Missing reference accessions in XML input: {', '.join(missing_refs)}")
+			critical_missing = []
+			for m in missing_refs:
+				# Default to 'reference' if type not specified, so treat as critical
+				rtype = ref_seq_dict.get(m, 'reference').strip().lower()
+				if rtype != 'exclusion_list':
+					critical_missing.append(m)
+			
+			if critical_missing:
+				raise ValueError(f"Missing CRITICAL reference accessions in XML input: {', '.join(critical_missing)}")
+			else:
+				print(f"Warning: {len(missing_refs)} exclusion_list references were not found in XML input. Proceeding as they are optional.")
 
 		selected = list(ref_xml_files)
 		remaining = [f for f in xml_files if f not in ref_xml_files]
@@ -300,13 +314,23 @@ class GenBankParser:
 		if self.require_refs and self.ref_list is None:
 			raise ValueError("Reference list is required when --require_refs is set")
 
-		ref_accessions = list(ref_seq_dict.keys()) if ref_seq_dict else []
-		selected_xml_files = self.select_xml_files(ref_accessions, xml_files)
+		# Pass full dict, not just keys, to support type checking
+		selected_xml_files = self.select_xml_files(ref_seq_dict, xml_files)
 
 		if self.require_refs and not self.test_run:
+			ref_accessions = list(ref_seq_dict.keys())
 			_, missing_refs = self.find_ref_xml_files(ref_accessions, xml_files)
 			if missing_refs:
-				raise ValueError(f"Missing reference accessions in XML input: {', '.join(missing_refs)}")
+				critical_missing = []
+				for m in missing_refs:
+					rtype = ref_seq_dict.get(m, 'reference').strip().lower()
+					if rtype != 'exclusion_list':
+						critical_missing.append(m)
+				
+				if critical_missing:
+					raise ValueError(f"Missing CRITICAL reference accessions in XML input: {', '.join(critical_missing)}")
+				else:
+					print(f"Warning: {len(missing_refs)} exclusion_list references were not found in XML input.")
 
 		total_xml = len(selected_xml_files)
 		count = 1

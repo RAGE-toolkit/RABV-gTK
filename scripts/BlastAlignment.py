@@ -160,6 +160,21 @@ class BlastAlignment:
 		else:
 			return [x.strip() for x in self.master_acc.split(',') if x.strip()]
 
+	def write_filtered_ref_fasta(self, output_dir, exclusion_refs):
+		filtered_ref_path = join(output_dir, "ref_seq_filtered.fa")
+		input_refs = read_file.fasta(self.db_fasta)
+		count = 0
+		with open(filtered_ref_path, 'w') as out_f:
+			for header, seq in input_refs:
+				# Use the first token of the header as accession for matching
+				acc = header.strip().split()[0]
+				if acc not in exclusion_refs:
+					out_f.write(f">{header}\n{seq}\n")
+				else:
+					count += 1
+		if count:
+			print(f"[exclusion_list] Excluded {count} references from ref_seq_filtered.fa")
+
 	def write_master_seq(self, output_dir):
 		masters = self.get_master_list()
 		with open(self.db_fasta, "r") as infile:
@@ -581,6 +596,7 @@ class BlastAlignment:
 			)
 			# Mark excluded sequences in the GenBank matrix (including exclusion_list hits)
 			self.update_gB_matrix(self.query_fasta, join(self.base_dir, self.output_dir, "query_uniq_tophits.tsv"), self.gb_matrix)
+			self.write_filtered_ref_fasta(join(self.base_dir, self.output_dir), self.get_exclusion_list_refs())
 		else:
 			if self.is_update == 'Y':	
 				blast_tmp_dir = join(self.base_dir, self.output_dir, "tmp_dir")
@@ -597,6 +613,7 @@ class BlastAlignment:
 				self.run_blastn(join(self.base_dir, self.output_dir), self.query_fasta)
 				self.process_non_segmented_virus(join(self.base_dir, self.output_dir), self.query_fasta)
 				self.update_gB_matrix(self.query_fasta, join(self.base_dir, self.output_dir, "query_uniq_tophits.tsv"), self.gb_matrix)
+				self.write_filtered_ref_fasta(join(self.base_dir, self.output_dir), self.get_exclusion_list_refs())
 
 
 if __name__ == "__main__":

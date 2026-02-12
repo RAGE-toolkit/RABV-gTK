@@ -56,21 +56,115 @@ if (unexpectedParams) {
 }
 
 process TEST_DEPENDENCIES{
-    errorStrategy 'ignore'
     output:
-        path "dependency_test.txt", optional: true
+        path "dependency_test.txt"
     shell:
     '''
-    set +e  # Don't fail on individual pip show failures
-    python --version > dependency_test.txt
-    pip show biopython >> dependency_test.txt 2>&1 || echo "biopython: NOT FOUND" >> dependency_test.txt
-    pip show pandas >> dependency_test.txt 2>&1 || echo "pandas: NOT FOUND" >> dependency_test.txt
-    pip show numpy >> dependency_test.txt 2>&1 || echo "numpy: NOT FOUND" >> dependency_test.txt
-    pip show openpyxl >> dependency_test.txt 2>&1 || echo "openpyxl: NOT FOUND" >> dependency_test.txt
-    pip show requests >> dependency_test.txt 2>&1 || echo "requests: NOT FOUND" >> dependency_test.txt
-    pip show python-dateutil >> dependency_test.txt 2>&1 || echo "python-dateutil: NOT FOUND" >> dependency_test.txt
-    nextalign --version >> dependency_test.txt 2>&1 || echo "nextalign: NOT FOUND" >> dependency_test.txt
-    exit 0
+    set +e
+
+    missing_count=0
+    {
+        echo "=== vgtk dependency preflight ==="
+        echo "date: $(date -Iseconds)"
+        echo "python executable: $(command -v python || echo 'NOT FOUND')"
+        echo "python version: $(python --version 2>&1)"
+        echo "CONDA_PREFIX=${CONDA_PREFIX:-<not set>}"
+        echo
+        echo "[required command-line tools]"
+    } > dependency_test.txt
+
+    check_cmd() {
+        local cmd="$1"
+        shift
+        if command -v "$cmd" >/dev/null 2>&1; then
+            local ver
+            ver="$($cmd "$@" 2>&1 | head -n 1)"
+            echo "OK   $cmd :: ${ver}" >> dependency_test.txt
+        else
+            echo "MISS $cmd :: not found in PATH" >> dependency_test.txt
+            missing_count=$((missing_count + 1))
+        fi
+    }
+
+    # Required by the current pipeline processes
+    check_cmd python --version
+    check_cmd blastn -version
+    check_cmd makeblastdb -version
+    check_cmd seqkit version
+    check_cmd nextalign --version
+    check_cmd mmseqs --version
+    check_cmd iqtree2 --version
+    check_cmd usher --version
+    check_cmd faToVcf 2>/dev/null
+    check_cmd efetch -version
+
+    {
+        echo
+        echo "[required python modules]"
+    } >> dependency_test.txt
+
+    check_py() {
+        local module="$1"
+        local label="$2"
+        python - <<PY >> dependency_test.txt 2>&1
+import importlib
+module = "${module}"
+label = "${label}"
+try:
+    m = importlib.import_module(module)
+    ver = getattr(m, "__version__", "<no __version__>")
+    print(f"OK   {label} ({module}) :: {ver}")
+except Exception as e:
+    print(f"MISS {label} ({module}) :: {e}")
+    raise
+PY
+        if [ $? -ne 0 ]; then
+            missing_count=$((missing_count + 1))
+        fi
+    }
+
+    check_py Bio biopython
+    check_py pandas pandas
+    check_py numpy numpy
+    check_py openpyxl openpyxl
+    check_py requests requests
+    check_py dateutil python-dateutil
+    check_py matplotlib matplotlib
+    check_py tqdm tqdm
+
+    {
+        echo
+        echo "[optional tools used by utility/legacy scripts]"
+    } >> dependency_test.txt
+
+    if command -v VeryFastTree >/dev/null 2>&1; then
+        echo "OK   VeryFastTree :: $(VeryFastTree -help 2>&1 | head -n 1)" >> dependency_test.txt
+    elif command -v FastTree >/dev/null 2>&1; then
+        echo "OK   FastTree :: $(FastTree -help 2>&1 | head -n 1)" >> dependency_test.txt
+    else
+        echo "WARN VeryFastTree/FastTree :: not found (only needed if VERY_FAST_TREE is enabled)" >> dependency_test.txt
+    fi
+
+    if command -v mafft >/dev/null 2>&1; then
+        echo "OK   mafft :: $(mafft --version 2>&1 | head -n 1)" >> dependency_test.txt
+    else
+        echo "WARN mafft :: not found (used by utility scripts, not main flow)" >> dependency_test.txt
+    fi
+
+    if command -v ncbi-acc-download >/dev/null 2>&1; then
+        echo "OK   ncbi-acc-download :: $(ncbi-acc-download --help 2>&1 | head -n 1)" >> dependency_test.txt
+    else
+        echo "WARN ncbi-acc-download :: not found (pip helper; not required for all runs)" >> dependency_test.txt
+    fi
+
+    echo >> dependency_test.txt
+    echo "missing_required_dependencies=${missing_count}" >> dependency_test.txt
+
+    if [ "$missing_count" -gt 0 ]; then
+        echo "[ERROR] Missing required dependencies: ${missing_count}" >&2
+        cat dependency_test.txt >&2
+        exit 1
+    fi
     '''
 }
 
@@ -148,15 +242,9 @@ process GENBANK_PARSER{
         echo "DEBUG: params.xml_dir is '!{params.xml_dir}'"
         
         # force re-run after update
-        extra=""
-        # Only require refs if NOT in test mode (explicit string match)
-        if [ "!{params.test}" != "1" ]; then
-             echo "DEBUG: Setting require_refs = true"
-             extra="--require_refs"
-        else
-             echo "DEBUG: Test mode detected, skipping require_refs"
-        fi
-
+        # Always require refs to ensure master sequences range are found (even in test mode)
+        extra="--require_refs"
+        
         # Logic: If xml_dir is provided (mimicking old XML_source=XML), apply test flags if needed
         if [ -n "!{params.xml_dir}" ] && [ "!{params.xml_dir}" != "null" ]; then
             if [ "!{params.test}" -eq "1" ]; then
@@ -206,13 +294,14 @@ process MERGE_GISAID {
        path gb_matrix
        path gisaid_meta
        path gisaid_nuc
+       path column_mapping
     output:
        path "gB_matrix_merged.tsv", emit: merged_matrix
     shell:
        '''
        python !{scripts_dir}/merge_into_gB_matrix.py -g !{gb_matrix} \
            -t !{gisaid_meta} -f !{gisaid_nuc} -o gB_matrix_merged.tsv \
-           -k Segment_Id --dataset_source gisaid
+           -k Segment_Id --dataset_source gisaid -m !{column_mapping}
        '''
 }
 
@@ -271,7 +360,7 @@ process BLAST_ALIGNMENT{
         path "query_uniq_tophit_annotated.tsv", type: "file", optional: true, emit: query_uniq_tophit_annotated
         path "grouped_fasta", type: 'dir', emit: grouped_fasta
         path "ref_seqs", type: 'dir', emit: ref_seqs_dir
-        path "ref_seq.fa", type: 'file', emit: ref_seqs_fasta
+        path "ref_seq_filtered.fa", type: 'file', emit: ref_seqs_fasta
         path "master_seq", type: 'dir', emit: master_seq_dir
         
     shell:
@@ -334,7 +423,7 @@ process PAD_ALIGNMENT{
 
         python !{scripts_dir}/PadAlignment.py -nd !{nextalign_dir} \
         -m "$TARGET_M" \
-        -o . -d . -i !{nextalign_dir}/query_aln --keep_intermediate_files 
+        -o . -d . -i !{nextalign_dir}/query_aln --keep_intermediate_files  
     '''
 }
 
@@ -407,9 +496,7 @@ process IQ_TREE{
 process USHER_PLACEMENT{
     publishDir "${params.publish_dir}"
     input:
-        path mmseq_cluster_dir
-        path iqtree_dir
-        path padded_aln
+        tuple path(mmseq_cluster_dir), path(iqtree_dir), path(padded_aln)
     output:
         path "Usher_${mmseq_cluster_dir.baseName}", emit: usher_out
     shell:
@@ -859,7 +946,9 @@ workflow {
          def db_in = params.previous_db ? file(params.previous_db) : file(params.scripts_dir)
          TIDY_GISAID(params.gisaid_dir, db_in)
          
-         MERGE_GISAID(gb_matrix_ch, TIDY_GISAID.out.gisaid_meta, TIDY_GISAID.out.gisaid_nuc)
+         // Define column mapping path relative to project
+         col_map = file("${projectDir}/generic/influenza/column_mapping.tsv")
+         MERGE_GISAID(gb_matrix_ch, TIDY_GISAID.out.gisaid_meta, TIDY_GISAID.out.gisaid_nuc, col_map)
          gb_matrix_ch = MERGE_GISAID.out.merged_matrix
          
          CAT_FASTA(gb_seqs_ch, TIDY_GISAID.out.gisaid_nuc)
@@ -881,15 +970,15 @@ workflow {
 
     // Add VALIDATE_SEGMENT here
     if (params.is_segmented == 'Y') {
-        if (params.is_flu == "Y") {
-            VALIDATE_STRAIN(data)
-            data = VALIDATE_STRAIN.out.validated_matrix
-        }
         VALIDATE_SEGMENT(data, BLAST_ALIGNMENT.out.query_uniq_tophit_annotated)
         // Update 'data' to point to the new validated matrix for downstream steps
         data = VALIDATE_SEGMENT.out.validated_matrix
         
         if (params.is_flu == "Y") {
+            // Flu pivoting requires Parsed_strain, created by VALIDATE_STRAIN
+            VALIDATE_STRAIN(data)
+            data = VALIDATE_STRAIN.out.validated_matrix
+
             PIVOT_TABLE_SEGMENTS(data)
             
             // Run tests for segmented viruses
@@ -915,7 +1004,7 @@ workflow {
     NEXTALIGN_ALIGNMENT(data,
                         BLAST_ALIGNMENT.out.grouped_fasta,
                         BLAST_ALIGNMENT.out.ref_seqs_dir,
-                        FILTER_AND_EXTRACT.out.ref_seqs_out,
+                        BLAST_ALIGNMENT.out.ref_seqs_fasta,
                         BLAST_ALIGNMENT.out.master_seq_dir,
                         params.ref_list,
                         ref_list_file)
@@ -938,19 +1027,27 @@ workflow {
     // Join the channels by segment name for USHER_PLACEMENT
     // Create tuples of (basename, file) for proper matching
     mmseq_with_key = MMSEQS_CLUSTERING.out.mmseq_clusters
-        .map { dir -> 
-            def baseName = dir.name.replace('MMseqClusters_', '').replace('_dedup', '')
-            [baseName, dir] 
+        .map { dir ->
+            def key = dir.name
+                .replaceFirst(/^MMseqClusters_/, '')
+                .replaceFirst(/_dedup$/, '')
+                .tokenize('.')[0]
+            [key, dir]
         }
     iqtree_with_key = IQ_TREE.out.iqtree_out
-        .map { dir -> 
-            def baseName = dir.name.replace('IQTree_MMseqClusters_', '').replace('_dedup', '')
-            [baseName, dir] 
+        .map { dir ->
+            def key = dir.name
+                .replaceFirst(/^IQTree_MMseqClusters_/, '')
+                .replaceFirst(/_dedup$/, '')
+                .tokenize('.')[0]
+            [key, dir]
         }
     dedup_with_key = DEDUP_ALIGNMENT.out.dedup_msa
-        .map { fasta -> 
-            def baseName = fasta.baseName.replace('_dedup', '')
-            [baseName, fasta] 
+        .map { fasta ->
+            def key = fasta.name
+                .replaceFirst(/_dedup\.fasta$/, '')
+                .tokenize('.')[0]
+            [key, fasta]
         }
     
     // Join the three channels by their segment key
@@ -958,10 +1055,10 @@ workflow {
         .join(iqtree_with_key)
         .join(dedup_with_key)
         .map { key, mmseq_dir, iqtree_dir, dedup_fasta -> 
-            [mmseq_dir, iqtree_dir, dedup_fasta] 
+            tuple(mmseq_dir, iqtree_dir, dedup_fasta)
         }
     
-    USHER_PLACEMENT(usher_input_ch.map{it[0]}, usher_input_ch.map{it[1]}, usher_input_ch.map{it[2]})
+    USHER_PLACEMENT(usher_input_ch)
     
     // VERY_FAST_TREE(PAD_ALIGNMENT.out.merged_msa)
     

@@ -20,9 +20,14 @@ class PadAlignment:
 			try:
 				df = pd.read_csv(master_acc, sep='\t', header=None, dtype=str)
 				if df.shape[1] >= 2:
+					# Filter for master if available
 					if df[1].str.lower().eq('master').any():
 						masters = df[df[1].str.lower() == 'master']
 						return masters[0].tolist()
+						
+					# If no explicit master, exclude exclusion_list entries
+					df = df[df[1].str.lower() != 'exclusion_list']
+						
 				return df[0].tolist()
 			except:
 				return []
@@ -110,6 +115,8 @@ class PadAlignment:
 
 	def find_fasta_file(self, input_dir,new_outputfile=False):
 		directory = join(self.base_dir, self.output_dir)
+		if not os.path.exists(directory):
+			return None
 		if new_outputfile:
 			return os.path.join(directory, "new_output.fasta")
 		else:
@@ -121,13 +128,20 @@ class PadAlignment:
 	def remove_redundant_sequences(self):
 		
 		input_file = self.find_fasta_file(join(self.base_dir, self.output_dir),self.new_outputfile) 
+		if not input_file:
+			print(f"No fasta file found in {join(self.base_dir, self.output_dir)} to remove redundant sequences from.")
+			return
+
 		unique_records = {}
-		for record in SeqIO.parse(input_file, "fasta"):
-			accession = record.id.split('|')[0] if '|' in record.id else record.id
-			if accession not in unique_records:
-				unique_records[accession] = record
-		with open(input_file, "w") as output_handle:
-			SeqIO.write(unique_records.values(), output_handle, "fasta")
+		try:
+			for record in SeqIO.parse(input_file, "fasta"):
+				accession = record.id.split('|')[0] if '|' in record.id else record.id
+				if accession not in unique_records:
+					unique_records[accession] = record
+			with open(input_file, "w") as output_handle:
+				SeqIO.write(unique_records.values(), output_handle, "fasta")
+		except Exception as e:
+			print(f"Error removing redundant sequences: {e}")
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description="Insert gaps from master alignment into corresponding subalignments.")
