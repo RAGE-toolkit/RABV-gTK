@@ -102,6 +102,34 @@ class NormalizeAndMerge:
         dup_df.to_csv(dup_file, sep="\t", index=False)
         return dup_file
 
+    def collapse_duplicate_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Pandas `reindex(columns=...)` fails when the source frame has duplicate
+        column labels. This can happen after mapping/rename if a target column
+        already exists in the input TSV.
+
+        Strategy: keep one column per label and coalesce values left-to-right,
+        filling empty/NaN entries with later duplicates.
+        """
+        if not df.columns.duplicated().any():
+            return df
+
+        collapsed = pd.DataFrame(index=df.index)
+        for col in pd.unique(df.columns):
+            same_cols = df.loc[:, df.columns == col]
+            if same_cols.shape[1] == 1:
+                collapsed[col] = same_cols.iloc[:, 0]
+                continue
+
+            merged = same_cols.iloc[:, 0].copy()
+            for i in range(1, same_cols.shape[1]):
+                candidate = same_cols.iloc[:, i]
+                empty_mask = merged.isna() | merged.astype(str).str.strip().eq("")
+                merged = merged.where(~empty_mask, candidate)
+            collapsed[col] = merged
+
+        return collapsed
+
 
 
     def process(self):
@@ -149,6 +177,11 @@ class NormalizeAndMerge:
 
         if mapping:
             norm_df = norm_df.rename(columns=mapping)
+
+        if norm_df.columns.duplicated().any():
+            dup_cols = norm_df.columns[norm_df.columns.duplicated()].unique().tolist()
+            self.log(f"[WARN] Duplicate column labels after mapping: {dup_cols}. Collapsing duplicates.")
+            norm_df = self.collapse_duplicate_columns(norm_df)
 
         # copy key to gB fields
         norm_df["primary_accession"] = norm_df[self.key]
