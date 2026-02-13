@@ -120,15 +120,24 @@ class GenerateTables:
 		header = ["sequence_id", "alignment_name", "alignment"]
 		write_file = open(join(self.base_dir, self.output_dir, "sequence_alignment.tsv"), 'w')
 		write_file.write("\t".join(header) + "\n")
-		rds = read_file.fasta(self.paded_aln)
-		for rows in rds:
-			if rows[0] not in accessions:
-				seqs[rows[0]] = rows[1]
-				accessions[rows[0]] = 1
-				if rows[0] in blast_dict:
-					write_file.write(rows[0].strip() + '\t' + blast_dict[rows[0].strip()] + '\t' + rows[1] + '\n')
-				else:
-					missing_accs.append(rows[0].strip())
+		
+		# Handle single file or list of files
+		paded_aln_files = self.paded_aln if isinstance(self.paded_aln, list) else [self.paded_aln]
+		
+		for paded_file in paded_aln_files:
+			if not os.path.exists(paded_file):
+				print(f"Warning: Padded alignment file not found: {paded_file}")
+				continue
+				
+			rds = read_file.fasta(paded_file)
+			for rows in rds:
+				if rows[0] not in accessions:
+					seqs[rows[0]] = rows[1]
+					accessions[rows[0]] = 1
+					if rows[0] in blast_dict:
+						write_file.write(rows[0].strip() + '\t' + blast_dict[rows[0].strip()] + '\t' + rows[1] + '\n')
+					else:
+						missing_accs.append(rows[0].strip())
 
 		for each_ref_aln in os.listdir(join(self.nextalign_dir)):
 			for each_ref_aln_file in os.listdir(join(self.nextalign_dir, each_ref_aln)):
@@ -180,7 +189,7 @@ class GenerateTables:
 		blast_dictionary = self.load_blast_hits(self.blast_hits)
 		#self.load_gb_matrix()
 		self.created_alignment_table(blast_dictionary)
-		#self.host_table()
+		self.host_table()
 		self.create_insertion_table()
 
 if __name__ == "__main__":
@@ -190,7 +199,7 @@ if __name__ == "__main__":
 	parser.add_argument('-o', '--output_dir', help='output directory to store all the db-ready tsv files', default="Tables")
 	parser.add_argument('-f', '--host_taxa', help='Host taxa file name, default="host_taxa.tsv"', default="host_taxa.tsv")
 	parser.add_argument('-bh', '--blast_hits', help='BLASTN unique hits', default="tmp/Blast/query_uniq_tophits.tsv")
-	parser.add_argument('-p', '--paded_aln', help='Paded alignment file', default="tmp/Pad-alignment/NC_001542.aligned_merged_MSA.fasta")
+	parser.add_argument('-p', '--paded_aln', help='Paded alignment file', nargs='+', default=["tmp/Pad-alignment/NC_001542.aligned_merged_MSA.fasta"])
 	parser.add_argument('-n', '--nextalign_dir', help='Nextalign aligned directory', default="tmp/Nextalign/")
 	parser.add_argument('-e', '--email', help='Email id', default='your-email@example.com')
 	args = parser.parse_args()

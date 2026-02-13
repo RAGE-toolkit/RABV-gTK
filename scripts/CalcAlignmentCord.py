@@ -1,4 +1,5 @@
 import os
+import pandas as pd
 from Bio import SeqIO
 from os.path import join
 from argparse import ArgumentParser
@@ -15,6 +16,32 @@ class CalculateAlignmentCoordinates:
 		self.output_file = output_file
 		self.master_accession = master_accession
 		self.blast_uniq_hits = blast_uniq_hits
+
+	def get_master_list(self):
+		if os.path.isfile(self.master_accession):
+			try:
+				df = pd.read_csv(self.master_accession, sep='\t', header=None, dtype=str)
+				if df.shape[1] >= 2:
+					if df[1].str.lower().eq('master').any():
+						masters = df[df[1].str.lower() == 'master']
+						return masters[0].tolist()
+				return df[0].tolist()
+			except:
+				return []
+		else:
+			return [x.strip() for x in self.master_accession.split(',') if x.strip()]
+
+	def get_gff_for_master(self, master):
+		# Find GFF file in self.master_gff that matches master
+		# self.master_gff is a list of files
+		if isinstance(self.master_gff, list):
+			for gff in self.master_gff:
+				if master in os.path.basename(gff):
+					return gff
+		elif isinstance(self.master_gff, str):
+			if master in os.path.basename(self.master_gff):
+				return self.master_gff
+		return None
 
 	def get_gap_ranges(self, sequence):
 		gap_ranges = []
@@ -95,11 +122,9 @@ class CalculateAlignmentCoordinates:
 	def find_gaps_in_fasta(self): #, fasta_file_dir, gff_file):
 		os.makedirs(join(self.tmp_dir, self.output_dir), exist_ok=True)
 
-		gff_dict = GffDictionary(self.master_gff).gff_dict
-		cds_list = gff_dict['CDS']
 		fasta_file_dir = self.paded_alignment
-
 		blast_dict = self.load_blast_hits()
+		masters = self.get_master_list()
 
 		header = ["accession", "master_ref_accession", "reference_accession", "aln_start", "aln_end", "cds_start", "cds_end", "product"]
 		with open(join(self.tmp_dir, self.output_dir, self.output_file), "w") as out_f:
@@ -108,8 +133,30 @@ class CalculateAlignmentCoordinates:
 			out_f.write("\n")
 
 			for fasta_file in os.listdir(fasta_file_dir):
+				
+				current_master = None
+				for m in masters:
+					if fasta_file.startswith(m):
+						current_master = m
+						break
+				
+				if not current_master:
+					# Fallback for single master case or if filename doesn't start with master
+					if len(masters) == 1:
+						current_master = masters[0]
+					else:
+						print(f"Could not determine master for {fasta_file}. Skipping.")
+						continue
 
-				calc = CalculateGenomeCoordinates(join(fasta_file_dir, fasta_file), self.master_accession)
+				gff_file = self.get_gff_for_master(current_master)
+				if not gff_file:
+					print(f"No GFF found for master {current_master}. Skipping.")
+					continue
+
+				gff_dict = GffDictionary(gff_file).gff_dict
+				cds_list = gff_dict['CDS']
+
+				calc = CalculateGenomeCoordinates(join(fasta_file_dir, fasta_file), current_master)
 				genome_coords = calc.extract_alignment_coordinates()
 				for record in SeqIO.parse(join(fasta_file_dir, fasta_file), "fasta"):
 
@@ -128,14 +175,19 @@ class CalculateAlignmentCoordinates:
 					#print(f">{record.id}", adjusted)
 					for each_cords in adjusted:
 						product = self.get_products_for_range(cds_list, each_cords)
-						master_acc, genome_cord_start, genome_cord_end = genome_coords[record.id]
+						if record.id in genome_coords:
+							master_acc, genome_cord_start, genome_cord_end = genome_coords[record.id]
+						else:
+							# Fallback if record not in genome_coords (should not happen if calc worked)
+							genome_cord_start, genome_cord_end = "NA", "NA"
+
 						for overlap_product in product:
 							if record.id in blast_dict:
-								data = [record.id, self.master_accession, blast_dict[record.id], str(genome_cord_start), str(genome_cord_end), str(each_cords[0]), str(each_cords[1]), overlap_product['product']]
+								data = [record.id, current_master, blast_dict[record.id], str(genome_cord_start), str(genome_cord_end), str(each_cords[0]), str(each_cords[1]), overlap_product['product']]
 								out_f.write('\t'.join(data))
 								out_f.write("\n")
 							else:
-								data = [record.id, self.master_accession, self.master_accession, str(genome_cord_start), str(genome_cord_end), str(each_cords[0]), str(each_cords[1]), overlap_product['product']]
+								data = [record.id, current_master, current_master, str(genome_cord_start), str(genome_cord_end), str(each_cords[0]), str(each_cords[1]), overlap_product['product']]
 								out_f.write('\t'.join(data))	
 								out_f.write("\n")				
 if __name__ == "__main__":
@@ -146,7 +198,7 @@ if __name__ == "__main__":
 	parser.add_argument('-o', '--output_file', help='Output file name', default='features.tsv')
 	parser.add_argument('-m', '--master_accession', help='Master accession', required=True)
 	parser.add_argument('-bh', '--blast_uniq_hits', help='Blast unique hits file', default='tmp/Blast/query_uniq_tophits.tsv')
-	parser.add_argument('-g', '--master_gff', help='Master GFF3 file', required=True)
+	parser.add_argument('-g', '--master_gff', help='Master GFF3 file(s)', required=True, nargs='+')
 	args = parser.parse_args()
 
 	processor = CalculateAlignmentCoordinates(args.paded_alignment, args.master_gff, args.tmp_dir, args.output_dir, args.output_file, args.master_accession, args.blast_uniq_hits)

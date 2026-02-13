@@ -1,0 +1,12 @@
+description	display_name	name	parent_name
+Polymerase basic protein 2	PB2	PB2	whole_genome
+Polymerase basic protein 1	PB1	PB1	whole_genome
+Polymerase acidic protein	PA	PA	whole_genome
+Haemagglutinin	HA	HA	whole_genome
+Nucleoprotein	NP	NP	whole_genome
+Neuraminidase	NA	NA	whole_genome
+Matrix protein 1	M1	M1	whole_genome
+Matrix protein 2	M2	M2	whole_genome
+Non-structural protein 1	NS1	NS1	whole_genome
+Nuclear export protein	NEP	NEP	whole_genome
+Whole genome	Whole genome	whole_genome	NULL

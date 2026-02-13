@@ -1,0 +1,12 @@
+description	display_name	name	parent_name
+Core protein	Core	Core	whole_genome
+Envelope glycoprotein 1	E1	E1	whole_genome
+Envelope glycoprotein 2	E2	E2	whole_genome
+p7 viroporin	p7	p7	whole_genome
+Non-structural protein 2	NS2	NS2	whole_genome
+Non-structural protein 3	NS3	NS3	whole_genome
+Non-structural protein 4A	NS4A	NS4A	whole_genome
+Non-structural protein 4B	NS4B	NS4B	whole_genome
+Non-structural protein 5A	NS5A	NS5A	whole_genome
+Non-structural protein 5B	NS5B	NS5B	whole_genome
+Whole genome	Whole genome	whole_genome	NULL

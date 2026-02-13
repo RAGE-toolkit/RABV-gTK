@@ -8,9 +8,23 @@ db_name="rabv-jul0425"
 skip_fill=${2:-true}  # Use this variable to control skipping AddMissingData.py
 is_segmented=${3:-N} #segmented virus or not Y for Yes and N for Not
 master_acc="NC_001542"
+update_file=""
+test_run=1
+
+if [ "$update_file" != "" ]; then
+  update_arg="--update $update_file"
+else
+  update_arg=""
+fi
+
+if [ "$test_run" != "0" ]; then
+  test_arg="--test_run"
+else
+  test_arg=""
+fi
 
 #python GenBankFetcher.py 
-python "${scripts_dir}/GenBankFetcher.py" --taxid "$TAX_ID" -b 50 --update tmp/GenBank-matrix/gB_matrix_raw.tsv
+python "${scripts_dir}/GenBankFetcher.py" --taxid "$TAX_ID" -b 50 $update_arg $test_arg
 if [ $? -ne 0 ]; then
   echo "Error: GenBankFetcher.py failed."
   exit 1
@@ -27,6 +41,7 @@ fi
 echo "DownloadGFF.py completed successfully."
 echo ""
 
+exit
 #python GenBankParser.py
 python "${scripts_dir}/GenBankParser.py" -r "generic/rabv/ref_list.txt"
 if [ $? -ne 0 ]; then
@@ -145,3 +160,4 @@ if [ $? -ne 0 ]; then
 fi
 echo "CreateSqliteDB.py completed successfully."
 echo ""
+

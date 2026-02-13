@@ -1,17 +1,47 @@
 import os
 import shutil
 import argparse
+import pandas as pd
 from os.path import join
 from Bio import SeqIO
 from Bio.Seq import Seq
 
 class PadAlignment:
-	def __init__(self, reference_alignment, input_dir, base_dir, output_dir, keep_intermediate_files):
+	def __init__(self, reference_alignment, input_dir, base_dir, output_dir, keep_intermediate_files, new_outputfile=False):
 		self.reference_alignment = reference_alignment
 		self.input_dir = input_dir
 		self.base_dir = base_dir
 		self.output_dir = output_dir
 		self.keep_intermediate_files = keep_intermediate_files
+		self.new_outputfile = new_outputfile
+
+	def get_master_list(self, master_acc):
+		if os.path.isfile(master_acc):
+			try:
+				df = pd.read_csv(master_acc, sep='\t', header=None, dtype=str)
+				if df.shape[1] >= 2:
+					# Filter for master if available
+					if df[1].str.lower().eq('master').any():
+						masters = df[df[1].str.lower() == 'master']
+						return masters[0].tolist()
+						
+					# If no explicit master, exclude exclusion_list entries
+					df = df[df[1].str.lower() != 'exclusion_list']
+						
+				return df[0].tolist()
+			except:
+				return []
+		else:
+			return [x.strip() for x in master_acc.split(',') if x.strip()]
+
+	def process_all_masters(self, master_list, nextalign_dir):
+		for master in master_list:
+			ref_aln_file = join(nextalign_dir, "reference_aln", master, f"{master}.aligned.fasta")
+			if os.path.exists(ref_aln_file):
+				print(f"Processing master {master}...")
+				self.process_master_alignment(ref_aln_file, self.input_dir, self.base_dir, self.output_dir, self.keep_intermediate_files)
+			else:
+				print(f"Reference alignment for {master} not found at {ref_aln_file}")
 
 	def insert_gaps(self, reference_aligned, subalignment_seqs):
 		ref_with_gaps_list = list(reference_aligned)
@@ -43,6 +73,10 @@ class PadAlignment:
 				print(f"Processing subalignment for {ref_id} using {subalignment_file}")
 				subalignment_seqs = list(SeqIO.parse(subalignment_file, "fasta"))
 				updated_seqs = self.insert_gaps(ref_aligned, subalignment_seqs)
+				
+				# Add the reference sequence to the list of sequences
+				updated_seqs.insert(0, ref_record)
+
 				os.makedirs(join(output_dir), exist_ok=True)
 				output_file = os.path.join(output_dir, f"{ref_id}_aligned_padded.fasta")
 				with open(join(output_file), "w") as output_handle:
@@ -50,7 +84,17 @@ class PadAlignment:
 					print(f"Saved updated alignment to {output_file}")
 				merged_sequences.extend(updated_seqs)
 			else:
-				print(f"Subalignment file {subalignment_file} not found. Skipping {ref_id}.")
+				print(f"Subalignment file {subalignment_file} not found. Adding reference only for {ref_id}.")
+				# Even if no subalignment exists (no queries hit this ref), we must include the ref itself
+				# so it appears in the final merged output.
+				updated_seqs = [ref_record]
+				
+				os.makedirs(join(output_dir), exist_ok=True)
+				output_file = os.path.join(output_dir, f"{ref_id}_aligned_padded.fasta")
+				with open(join(output_file), "w") as output_handle:
+					SeqIO.write(updated_seqs, output_handle, "fasta")
+					print(f"Saved reference-only alignment to {output_file}")
+				merged_sequences.extend(updated_seqs)
 
 		if merged_sequences:
 			merged_output_file = os.path.join(base_dir, output_dir, os.path.basename(reference_alignment_file).replace(".fasta", "_merged_MSA.fasta"))
@@ -69,40 +113,64 @@ class PadAlignment:
 					print(f"Deleted intermediate file {padded_file}")
 			shutil.rmtree(output_dir)
 
-	def find_fasta_file(self, input_dir):
+	def find_fasta_file(self, input_dir,new_outputfile=False):
 		directory = join(self.base_dir, self.output_dir)
-		for file in os.listdir(directory):
-			if file.endswith(".fasta") or file.endswith(".fa"):
-				return os.path.join(directory, file)
-		return None
+		if not os.path.exists(directory):
+			return None
+		if new_outputfile:
+			return os.path.join(directory, "new_output.fasta")
+		else:
+			for file in os.listdir(directory):
+				if file.endswith(".fasta") or file.endswith(".fa"):
+					return os.path.join(directory, file)
+			return None
 
 	def remove_redundant_sequences(self):
-		input_file = self.find_fasta_file(join(self.base_dir, self.output_dir)) 
+		
+		input_file = self.find_fasta_file(join(self.base_dir, self.output_dir),self.new_outputfile) 
+		if not input_file:
+			print(f"No fasta file found in {join(self.base_dir, self.output_dir)} to remove redundant sequences from.")
+			return
+
 		unique_records = {}
-		for record in SeqIO.parse(input_file, "fasta"):
-			accession = record.id.split('|')[0] if '|' in record.id else record.id
-			if accession not in unique_records:
-				unique_records[accession] = record
-		with open(input_file, "w") as output_handle:
-			SeqIO.write(unique_records.values(), output_handle, "fasta")
+		try:
+			for record in SeqIO.parse(input_file, "fasta"):
+				accession = record.id.split('|')[0] if '|' in record.id else record.id
+				if accession not in unique_records:
+					unique_records[accession] = record
+			with open(input_file, "w") as output_handle:
+				SeqIO.write(unique_records.values(), output_handle, "fasta")
+		except Exception as e:
+			print(f"Error removing redundant sequences: {e}")
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description="Insert gaps from master alignment into corresponding subalignments.")
-	parser.add_argument("-r", "--reference_alignment", help="Path to master alignment file (FASTA format).", required=True)
+	parser.add_argument("-r", "--reference_alignment", help="Path to master alignment file (FASTA format).")
 	parser.add_argument("-i", "--input_dir", help="Directory containing subalignment files (Nextalign output).", default="tmp/Nextalign/query_aln")
 	parser.add_argument("-d", "--base_dir", help="Base directory.", default="tmp")
 	parser.add_argument("-o", "--output_dir", help="Directory to save padded subalignments and merged files.", default="Pad-alignment")
 	parser.add_argument("--keep_intermediate_files", action="store_true", help="Keep intermediate files (padded subalignment). Default: disabled (files will be removed).")
-
+	parser.add_argument("-n","--new_outputfile", action="store_true", help="New output file name for the final merged alignment.")
+	parser.add_argument("-m", "--master_acc", help="Path to ref_list file (TSV with columns: accession, type, segment) OR comma-separated master accession IDs. For segmented viruses, the script extracts all 'master' entries to process each segment separately.")
+	parser.add_argument("-nd", "--nextalign_dir", help="Path to Nextalign output directory containing reference_aln/ and query_aln/ subdirectories.")
+ 
 	args = parser.parse_args()
 
-	processor = PadAlignment(args.reference_alignment, args.input_dir, args.base_dir, args.output_dir, args.keep_intermediate_files)
-	processor.process_master_alignment(
-		reference_alignment_file=args.reference_alignment,
-		input_dir=args.input_dir,
-		base_dir=args.base_dir,
-		output_dir=args.output_dir,
-		keep_intermediate_files=args.keep_intermediate_files
-	)
+	processor = PadAlignment(args.reference_alignment, args.input_dir, args.base_dir, args.output_dir, args.keep_intermediate_files, args.new_outputfile)
+
+	if args.master_acc and args.nextalign_dir:
+		masters = processor.get_master_list(args.master_acc)
+		processor.process_all_masters(masters, args.nextalign_dir)
+	elif args.reference_alignment:
+		processor.process_master_alignment(
+			reference_alignment_file=args.reference_alignment,
+			input_dir=args.input_dir,
+			base_dir=args.base_dir,
+			output_dir=args.output_dir,
+			keep_intermediate_files=args.keep_intermediate_files
+		)
+	else:
+		print("Error: Either -r (reference alignment) or both -m (master acc) and -nd (nextalign dir) must be provided.")
+
 	processor.remove_redundant_sequences()
 

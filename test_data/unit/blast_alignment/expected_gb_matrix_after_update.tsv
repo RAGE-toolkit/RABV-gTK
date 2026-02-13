@@ -1,0 +1,4 @@
+gi_number	sequence	exclusion_criteria	exclusion_status
+Q1	AAAA		
+Q2	CCCC	preexisting; excluded: best BLAST hit is an exclusion_list reference	1
+Q3	GGGG	excluded due to no hit	1

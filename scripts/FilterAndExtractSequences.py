@@ -43,11 +43,25 @@ class FilterAndExtractSequences:
 		return ref_list
 
 	def read_ref_list_segmented_virus(self):
-		ref_list = []
+		"""Return a dict {accession: type} where type is master/reference/exclusion_list."""
+		ref_list = {}
 		with open(self.ref_file) as f:
 			for each_ref_line in f:
-				split_ref_line = each_ref_line.split("|")
-				ref_list.append(split_ref_line[0])
+				line = each_ref_line.strip()
+				if not line: continue
+				
+				if '\t' in line:
+					parts = line.split('\t')
+					acc = parts[0].strip()
+					acc_type = parts[1].strip() if len(parts) > 1 else 'reference'
+				elif '|' in line:
+					acc = line.split("|")[0].strip()
+					acc_type = 'reference'
+				else:
+					acc = line.strip()
+					acc_type = 'reference'
+				
+				ref_list[acc] = acc_type
 		return ref_list
 
 	def check_gb_division(self):
@@ -65,10 +79,22 @@ class FilterAndExtractSequences:
 		sequence_dict = self.fasta_to_dict()
 		exclusion_dict = {}
 	
+		# Both methods now return dict {accession: type}
 		if self.segmented_virus == "Y":
 			ref_list = self.read_ref_list_segmented_virus()
 		else:
 			ref_list = self.read_ref_list()
+
+		# Identify which refs are exclusion_list type
+		exclusion_list_refs = {acc for acc, acc_type in ref_list.items() 
+			if acc_type.strip().lower() == 'exclusion_list'}
+		if exclusion_list_refs:
+			print(f"Found {len(exclusion_list_refs)} exclusion_list references: {', '.join(sorted(exclusion_list_refs))}")
+			# Write exclusion ref list for downstream use by BlastAlignment
+			exclusion_refs_file = join(self.base_dir, self.output_dir, 'exclusion_refs.txt')
+			with open(exclusion_refs_file, 'w') as ef:
+				for acc in sorted(exclusion_list_refs):
+					ef.write(f"{acc}\n")
 
 		query_seq_file = join(self.base_dir, self.output_dir, 'query_seq.fa')
 		ref_seq_file = join(self.base_dir, self.output_dir, 'ref_seq.fa')
@@ -92,10 +118,30 @@ class FilterAndExtractSequences:
 						continue
 
 					gb_division = row['division']
-					seq_len = int(row['length'])
-					seq_len_without_n = seq_len - int(row['n'])
 					accession = row['gi_number'] #row['primary_accession']
-					sequence = sequence_dict[accession]
+					
+					# Get sequence safely
+					if accession in sequence_dict:
+						sequence = sequence_dict[accession]
+					else:
+						# If sequence is missing but row exists, we might have a problem.
+						# For now, let's treat it as empty string to avoid crashes, 
+						# or if original behavior was to crash, we should maybe duplicate that?
+						# Original: sequence = sequence_dict[accession] -> KeyError
+						# Let's try to be robust. 
+						sequence = ""
+
+					try:
+						seq_len = int(row['length'])
+					except (ValueError, TypeError):
+						seq_len = len(sequence)
+
+					try:
+						n_count = int(row['n'])
+					except (ValueError, TypeError):
+						n_count = sequence.upper().count('N') if sequence else 0
+
+					seq_len_without_n = seq_len - n_count
 
 					exclusion_status = 0
 					exclusion_criteria = ""

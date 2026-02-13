@@ -35,6 +35,24 @@ class BlastAlignment:
 
 		return accessions
 
+	def get_exclusion_list_refs(self):
+		"""Read the ref_list/segment file and return a set of accessions marked as exclusion_list."""
+		exclusion_refs = set()
+		# Use segment_file if available (segmented), otherwise master_acc (which may be a file)
+		ref_file = self.segment_file or self.master_acc
+		if ref_file and os.path.isfile(ref_file):
+			with open(ref_file) as f:
+				for line in f:
+					line = line.strip()
+					if not line:
+						continue
+					parts = line.split('\t')
+					if len(parts) >= 2 and parts[1].strip().lower() == 'exclusion_list':
+						exclusion_refs.add(parts[0].strip())
+		if exclusion_refs:
+			print(f"[exclusion_list] Found {len(exclusion_refs)} exclusion_list references: {', '.join(sorted(exclusion_refs))}")
+		return exclusion_refs
+
 	def update(self, query_tmp_dir):
 		if os.path.exists(self.query_fasta):
 			query_accession = [record.id for record in SeqIO.parse(self.query_fasta, "fasta")]
@@ -128,18 +146,47 @@ class BlastAlignment:
 		except subprocess.CalledProcessError as e:
 			print(f"Error running blastn: {e}")
 
-	def write_master_seq(self, output_dir):
-		with open(self.db_fasta, "r") as infile:
-			records = SeqIO.parse(infile, "fasta")
-			selected_records = [record for record in records if record.id == self.master_acc]
-			
-		if selected_records:
-			with open(join(output_dir, self.master_acc + '.fasta'), "w") as outfile:
-				SeqIO.write(selected_records, outfile, "fasta")
-				print(f"Sequence '{self.master_acc}' has been saved to {join(output_dir, self.master_acc)}")
+	def get_master_list(self):
+		if os.path.isfile(self.master_acc):
+			try:
+				df = pd.read_csv(self.master_acc, sep='\t', header=None, dtype=str)
+				if df.shape[1] >= 2:
+					if df[1].str.lower().eq('master').any():
+						masters = df[df[1].str.lower() == 'master']
+						return masters[0].tolist()
+				return df[0].tolist()
+			except:
+				return []
 		else:
-			print(f"Sequence ID '{self.master_acc}' not found in {self.db_fasta}")
-			# add close script here
+			return [x.strip() for x in self.master_acc.split(',') if x.strip()]
+
+	def write_filtered_ref_fasta(self, output_dir, exclusion_refs):
+		filtered_ref_path = join(output_dir, "ref_seq_filtered.fa")
+		input_refs = read_file.fasta(self.db_fasta)
+		count = 0
+		with open(filtered_ref_path, 'w') as out_f:
+			for header, seq in input_refs:
+				# Use the first token of the header as accession for matching
+				acc = header.strip().split()[0]
+				if acc not in exclusion_refs:
+					out_f.write(f">{header}\n{seq}\n")
+				else:
+					count += 1
+		if count:
+			print(f"[exclusion_list] Excluded {count} references from ref_seq_filtered.fa")
+
+	def write_master_seq(self, output_dir):
+		masters = self.get_master_list()
+		with open(self.db_fasta, "r") as infile:
+			records = SeqIO.to_dict(SeqIO.parse(infile, "fasta"))
+			
+		for acc in masters:
+			if acc in records:
+				with open(join(output_dir, acc + '.fasta'), "w") as outfile:
+					SeqIO.write(records[acc], outfile, "fasta")
+					print(f"Sequence '{acc}' has been saved to {join(output_dir, acc)}")
+			else:
+				print(f"Sequence ID '{acc}' not found in {self.db_fasta}")
 	
 	def process_non_segmented_virus(self, output_dir, query_fasta):
 		input_file = join(output_dir, "query_tophits.tsv")
@@ -158,6 +205,7 @@ class BlastAlignment:
 		os.makedirs(sorted_all, exist_ok=True)
 		os.makedirs(master_seq, exist_ok=True)
 
+		exclusion_refs = self.get_exclusion_list_refs()
 		records = {}
 		values = {}
 
@@ -178,8 +226,15 @@ class BlastAlignment:
 
 		with open(query_tophit_uniq, 'w', newline='') as file:
 			writer = csv.writer(file, delimiter='\t')
+			excluded_count = 0
 			for record in records.values():
+				# Skip queries whose best hit is an exclusion_list reference
+				if record[1] in exclusion_refs:
+					excluded_count += 1
+					continue
 				writer.writerow(record)
+			if excluded_count:
+				print(f"[exclusion_list] Excluded {excluded_count} queries matching exclusion_list references")
 	
 		seq_dicts = {}
 		query_seqs = read_file.fasta(query_fasta)  
@@ -237,6 +292,9 @@ class BlastAlignment:
 			seq_dicts[rows[0].strip()] = rows[1].strip()
 
 		for each_ref_acc, list_of_query_acc in grouped_dict.items():
+			# Don't write grouped fasta or ref_seqs for exclusion_list references
+			if each_ref_acc in exclusion_refs:
+				continue
 			with open(join(grouped_fasta, each_ref_acc + '.fasta'), 'a') as write_file:
 				for each_query_acc in list_of_query_acc:
 					seqs = seq_dicts[each_query_acc]
@@ -250,6 +308,9 @@ class BlastAlignment:
 			seq_dicts[rows[0].strip()] = rows[1].strip()
 			
 		for ref_accs in grouped_dict.keys():
+			# Don't write ref_seq files for exclusion_list references
+			if ref_accs in exclusion_refs:
+				continue
 			seqs = seq_dicts[ref_accs]
 			with open(join(ref_seq_dir, ref_accs + '.fasta'), 'w') as write_file:
 				write_file.write(">" + ref_accs + '\n')
@@ -261,6 +322,8 @@ class BlastAlignment:
 		segments = {}
 		segment_assigned = {}
 		seg_dict = {}
+
+		exclusion_refs = self.get_exclusion_list_refs()
 
 		os.makedirs(join(self.base_dir, self.output_dir, "grouped_fasta"), exist_ok=True)
 		os.makedirs(join(self.base_dir, self.output_dir, "segment_sorted"), exist_ok=True)
@@ -276,7 +339,7 @@ class BlastAlignment:
 		ref_seqs = join(self.base_dir, self.output_dir, "ref_seqs")
 		master_seq = join(self.base_dir, self.output_dir, "master_seq")
 		
-		self.write_master_file(self, master_seq)
+		self.write_master_seq(master_seq)
 
 		with open(input_file, newline='') as file:
 			reader = csv.reader(file, delimiter='\t')
@@ -288,14 +351,36 @@ class BlastAlignment:
 				else:
 					uniq_hits[col1] = [col1, col2, col3, col4]
 
+		# Filter out queries whose best hit is an exclusion_list reference
+		excluded_query_count = 0
 		with open(uniq_hit_output, 'w') as write_uniq_hits:
 			for k, v in uniq_hits.items():
+				if v[1] in exclusion_refs:
+					excluded_query_count += 1
+					continue
 				write_uniq_hits.write('\t'.join(v) + '\n')
+		if excluded_query_count:
+			print(f"[exclusion_list] Excluded {excluded_query_count} queries matching exclusion_list references")
 		
+		# Build segment lookup, but also track which segments are exclusion-only
+		exclusion_segments = set()
 		for line in open(segment_file):
-				accession, segment = line.strip().split('\t')
+				parts = line.strip().split('\t')
+				if len(parts) >= 2:
+					accession = parts[0]
+					acc_type = parts[1].strip().lower() if len(parts) >= 2 else ''
+					segment = parts[-1] # Assume last column is segment
+				else:
+					continue
+
 				accession = accession.split('|')[0]
 				segments[accession] = segment
+				if acc_type == 'exclusion_list':
+					exclusion_segments.add(segment)
+
+		# Log which segments are being excluded
+		if exclusion_segments:
+			print(f"[exclusion_list] Segments with exclusion_list refs: {', '.join(sorted(exclusion_segments))}")
 
 		with open(annotated_output, 'w') as write_segment:
 			with open(uniq_hit_output, newline='') as file:
@@ -367,6 +452,9 @@ class BlastAlignment:
 			print(f"loaded seg_{segment}.fa")
 
 			for each_ref_acc, query_acc in ref_acc.items():
+				# Don't write grouped fasta for exclusion_list references
+				if each_ref_acc in exclusion_refs:
+					continue
 				write_file = open(join(grouped_fasta, each_ref_acc + ".fa"), 'w')
 				for each_query in query_acc:
 						write_file.write(">" + each_query + "\n" + seq_dict[each_query] + "\n")
@@ -375,16 +463,38 @@ class BlastAlignment:
 		reference_seqs = read_file.fasta(self.db_fasta)
 	
 		for header, sequence in reference_seqs:
+			# Don't write ref_seq files for exclusion_list references
+			if header in exclusion_refs:
+				continue
 			write_file = open(join(ref_seqs, header + ".fa"), "w")
 			write_file.write(">" + header + "\n" + sequence + "\n")
 			write_file.close()
 
 	def update_gB_matrix(self, query_fasta, query_tophit_uniq, gB_matrix_file):
+		exclusion_refs = self.get_exclusion_list_refs()
+
 		uniq_blast_acc = {}
 		with open(query_tophit_uniq) as f:
 			for line in f:
 				query_acc, ref_acc, score, strand = line.strip().split("\t")
 				uniq_blast_acc[query_acc] = ref_acc
+
+		# Also read the raw blast hits to identify which queries hit exclusion refs
+		# (these were filtered from query_uniq_tophits but we need to mark them specifically)
+		raw_blast_file = os.path.join(os.path.dirname(query_tophit_uniq), "query_tophits.tsv")
+		exclusion_hit_queries = set()
+		if os.path.exists(raw_blast_file) and exclusion_refs:
+			raw_hits = {}
+			with open(raw_blast_file) as f:
+				for line in f:
+					parts = line.strip().split("\t")
+					if len(parts) >= 4:
+						q, r, s, st = parts[0], parts[1], float(parts[2]), parts[3]
+						if q not in raw_hits or s > raw_hits[q][1]:
+							raw_hits[q] = (r, s)
+			for q, (r, s) in raw_hits.items():
+				if r in exclusion_refs:
+					exclusion_hit_queries.add(q)
 
 		query_acc_status = {}
 		read_query_obj = read_file.fasta(query_fasta)
@@ -408,10 +518,16 @@ class BlastAlignment:
 			for row in reader:
 				gi = row.get('gi_number')
 				status = query_acc_status.get(gi, 0)
-				#row['exclusion_status'] = str(status)
 
 				existing_criteria = row.get('exclusion_criteria', '')
-				if status == 1 and gi in query_acc_status:
+				if gi in exclusion_hit_queries:
+					new_criteria = 'excluded: best BLAST hit is an exclusion_list reference'
+					if existing_criteria:
+						row['exclusion_criteria'] = f"{existing_criteria}; {new_criteria}"
+					else:
+						row['exclusion_criteria'] = new_criteria
+					row['exclusion_status'] = '1'
+				elif status == 1 and gi in query_acc_status:
 					new_criteria = 'excluded due to no hit'
 					if existing_criteria:
 						row['exclusion_criteria'] = f"{existing_criteria}; {new_criteria}"
@@ -468,7 +584,7 @@ class BlastAlignment:
 
 		if self.is_segmented_virus == 'Y':
 			self.run_makeblastdb(join(self.base_dir, self.output_dir))
-			self.run_blastn(join(self.base_dir, self.output_dir))
+			self.run_blastn(join(self.base_dir, self.output_dir), self.query_fasta)
 			for each_segment_dir in [join(self.base_dir, self.output_dir, "segment_sorted"), join(self.base_dir, self.output_dir, "segment_sorted_all"), join(self.base_dir, self.output_dir, "segment_merged_fasta")]:
 				self.delete_directory(each_segment_dir)
 
@@ -478,6 +594,9 @@ class BlastAlignment:
 				self.segment_file,
 				join(self.base_dir, self.output_dir, "query_uniq_tophit_annotated.tsv")
 			)
+			# Mark excluded sequences in the GenBank matrix (including exclusion_list hits)
+			self.update_gB_matrix(self.query_fasta, join(self.base_dir, self.output_dir, "query_uniq_tophits.tsv"), self.gb_matrix)
+			self.write_filtered_ref_fasta(join(self.base_dir, self.output_dir), self.get_exclusion_list_refs())
 		else:
 			if self.is_update == 'Y':	
 				blast_tmp_dir = join(self.base_dir, self.output_dir, "tmp_dir")
@@ -494,6 +613,7 @@ class BlastAlignment:
 				self.run_blastn(join(self.base_dir, self.output_dir), self.query_fasta)
 				self.process_non_segmented_virus(join(self.base_dir, self.output_dir), self.query_fasta)
 				self.update_gB_matrix(self.query_fasta, join(self.base_dir, self.output_dir, "query_uniq_tophits.tsv"), self.gb_matrix)
+				self.write_filtered_ref_fasta(join(self.base_dir, self.output_dir), self.get_exclusion_list_refs())
 
 
 if __name__ == "__main__":

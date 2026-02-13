@@ -1,0 +1,9 @@
+input_fasta	ranges
+refset_1_aln_merged_MSA.fasta	"28:2310"
+refset_2_aln_merged_MSA.fasta	"27:2300"
+refset_3_aln_merged_MSA.fasta	"25:2175"
+refset_4_aln_merged_MSA.fasta	"47:1891"
+refset_5_aln_merged_MSA.fasta	"46:1542"
+refset_6_aln_merged_MSA.fasta	"24:1535"
+refset_7_aln_merged_MSA.fasta	"26:1016"
+refset_8_aln_merged_MSA.fasta	"28:864"
