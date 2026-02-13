@@ -93,7 +93,14 @@ process TEST_DEPENDENCIES{
     check_cmd seqkit version
     check_cmd nextalign --version
     check_cmd mmseqs --version
-    check_cmd iqtree2 --version
+    if command -v iqtree2 >/dev/null 2>&1; then
+        check_cmd iqtree2 --version
+    elif command -v iqtree >/dev/null 2>&1; then
+        check_cmd iqtree --version
+    else
+        echo "MISS iqtree2/iqtree :: not found in PATH" >> dependency_test.txt
+        missing_count=$((missing_count + 1))
+    fi
     check_cmd usher --version
     check_cmd faToVcf 2>/dev/null
     check_cmd efetch -version
@@ -488,8 +495,18 @@ process IQ_TREE{
             exit 1
         fi
 
+        IQTREE_BIN=""
+        if command -v iqtree2 >/dev/null 2>&1; then
+            IQTREE_BIN="iqtree2"
+        elif command -v iqtree >/dev/null 2>&1; then
+            IQTREE_BIN="iqtree"
+        else
+            echo "[error] iqtree2/iqtree not found in PATH" >&2
+            exit 1
+        fi
+
         mkdir -p IQTree_!{mmseq_cluster_dir.baseName}
-        iqtree2 -s "$CLUSTER_REP" -nt AUTO -m GTR -pre IQTree_!{mmseq_cluster_dir.baseName}/iqtree  -T !{params.mmseqs_threads}
+        "$IQTREE_BIN" -s "$CLUSTER_REP" -nt AUTO -m GTR -pre IQTree_!{mmseq_cluster_dir.baseName}/iqtree  -T !{params.mmseqs_threads}
     '''
 }
 
