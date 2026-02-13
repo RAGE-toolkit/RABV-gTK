@@ -491,8 +491,13 @@ process IQ_TREE{
     '''
         CLUSTER_REP=$(find -L !{mmseq_cluster_dir} -name "*_cluster_rep.fasta" -print -quit)
         if [ -z "$CLUSTER_REP" ]; then
-            echo "[error] No MMseqs centroid FASTA (*_cluster_rep.fasta) found in !{mmseq_cluster_dir}" >&2
-            exit 1
+            CLUSTER_REP=$(find -L !{mmseq_cluster_dir} -name "*.fasta" -print -quit)
+            if [ -n "$CLUSTER_REP" ]; then
+                echo "[warn] *_cluster_rep.fasta not found; falling back to $CLUSTER_REP" >&2
+            else
+                echo "[error] No FASTA found in !{mmseq_cluster_dir}" >&2
+                exit 1
+            fi
         fi
 
         IQTREE_BIN=""
@@ -960,7 +965,8 @@ workflow {
     def gb_seqs_ch = GENBANK_PARSER.out.sequences_out
 
     if (params.gisaid_dir) {
-         def db_in = params.previous_db ? file(params.previous_db) : file(params.scripts_dir)
+            def fallbackDbPath = params.scripts_dir ?: "${projectDir}/scripts"
+            def db_in = params.previous_db ? file(params.previous_db) : file(fallbackDbPath)
          TIDY_GISAID(params.gisaid_dir, db_in)
          
          // Define column mapping path relative to project
