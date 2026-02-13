@@ -467,16 +467,17 @@ process TEST_SUBSAMPLE_CLUSTER_INPUT {
     input:
         path dedup_msa
     output:
-        path "${dedup_msa.name}", emit: dedup_for_cluster
+        path "${dedup_msa.baseName}_cluster_input.fasta", emit: dedup_for_cluster
     shell:
     '''
         MAX_SEQS="!{params.test_max_cluster_seqs}"
+        OUT_FILE="!{dedup_msa.baseName}_cluster_input.fasta"
 
         if [ -n "$MAX_SEQS" ] && [ "$MAX_SEQS" != "null" ] && [ "$MAX_SEQS" -gt 0 ] 2>/dev/null; then
             echo "[test-mode] Subsampling !{dedup_msa} to first ${MAX_SEQS} sequences for clustering"
-            seqkit head -n "$MAX_SEQS" "!{dedup_msa}" -o "!{dedup_msa.name}"
+            seqkit head -n "$MAX_SEQS" "!{dedup_msa}" -o "$OUT_FILE"
         else
-            cp "!{dedup_msa}" "!{dedup_msa.name}"
+            cp "!{dedup_msa}" "$OUT_FILE"
         fi
     '''
 }
