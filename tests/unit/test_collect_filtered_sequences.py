@@ -12,6 +12,7 @@ from CollectFilteredSequences import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "CollectFilteredSequences.py"
+DATA_DIR = REPO_ROOT / "test_data" / "unit" / "collect_filtered_sequences_edge"
 
 
 def write_csv(path: Path, rows):
@@ -91,3 +92,15 @@ def test_cli_creates_empty_outputs_when_no_errors(tmp_path: Path):
     assert out_ids.exists()
     assert out_tsv.read_text(encoding="utf-8").strip() == "seq_name\treference\terror\twarnings"
     assert out_ids.read_text(encoding="utf-8") == ""
+
+
+def test_collect_filtered_sequences_with_fixture_dataset(tmp_path: Path):
+    nextalign_dir = DATA_DIR / "Nextalign"
+    out_tsv = tmp_path / "fixture_filtered.tsv"
+
+    filtered = collect_filtered_sequences(str(nextalign_dir), str(out_tsv))
+    write_filtered_list(filtered, str(out_tsv))
+    out_ids = write_filtered_ids_only(filtered, str(out_tsv))
+
+    assert out_tsv.read_text(encoding="utf-8") == (DATA_DIR / "expected_filtered.tsv").read_text(encoding="utf-8")
+    assert Path(out_ids).read_text(encoding="utf-8") == (DATA_DIR / "expected_ids.txt").read_text(encoding="utf-8")

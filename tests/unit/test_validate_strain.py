@@ -10,6 +10,10 @@ from ValidateStrain import (
 )
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = REPO_ROOT / "test_data" / "unit" / "validate_strain_edge"
+
+
 def write_tsv(path: Path, rows, header):
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f, delimiter="\t")
@@ -96,3 +100,25 @@ def test_process_matrix_overwrite_mode(tmp_path: Path):
 
     assert rows[0]["Parsed_strain"] == "A/goose/CN/7"
     assert rows[0]["serotype_validated"] == "H9N2"
+
+
+def test_edge_dataset_matches_expected_output(tmp_path: Path):
+    input_tsv = tmp_path / "input.tsv"
+    output_tsv = tmp_path / "output.tsv"
+
+    input_tsv.write_text((DATA_DIR / "input.tsv").read_text(encoding="utf-8"), encoding="utf-8")
+
+    replacements = {}
+    with (DATA_DIR / "replacements.tsv").open("r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            replacements[row["raw_value"]] = row["curated_value"]
+
+    process_matrix(
+        str(input_tsv),
+        str(output_tsv),
+        overwrite=False,
+        serotype_replacements=replacements,
+    )
+
+    assert read_tsv_dicts(output_tsv) == read_tsv_dicts(DATA_DIR / "expected.tsv")

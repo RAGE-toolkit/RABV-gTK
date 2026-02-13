@@ -1,0 +1,6 @@
+primary_accession	exclusion	notes
+Q_KEEP	manual keep	alpha
+Q_FLOAT		beta
+Q_OKPAD		gamma
+Q_MISS		delta
+Q_NONINT		epsilon
