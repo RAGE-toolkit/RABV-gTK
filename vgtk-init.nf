@@ -12,7 +12,7 @@ def scriptDefinedParams = [
     "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table", "is_flu", "gene_info",
     "xml_dir", "update", "update_file",
     "mmseqs_min_seq_id", "mmseqs_threads", "mmseqs_trim_cds_file",
-    "gisaid_dir", "previous_db", "conda_path"
+    "gisaid_dir", "previous_db", "conda_path", "test_max_cluster_seqs"
     // Add all parameter names defined above
 ]
 
@@ -459,6 +459,25 @@ process DEDUP_ALIGNMENT{
     shell:
     '''
         seqkit rmdup -n !{padded_aln} -o !{padded_aln.baseName}_dedup.fasta
+    '''
+}
+
+process TEST_SUBSAMPLE_CLUSTER_INPUT {
+    publishDir "${params.publish_dir}"
+    input:
+        path dedup_msa
+    output:
+        path "${dedup_msa.name}", emit: dedup_for_cluster
+    shell:
+    '''
+        MAX_SEQS="!{params.test_max_cluster_seqs}"
+
+        if [ -n "$MAX_SEQS" ] && [ "$MAX_SEQS" != "null" ] && [ "$MAX_SEQS" -gt 0 ] 2>/dev/null; then
+            echo "[test-mode] Subsampling !{dedup_msa} to first ${MAX_SEQS} sequences for clustering"
+            seqkit head -n "$MAX_SEQS" "!{dedup_msa}" -o "!{dedup_msa.name}"
+        else
+            cp "!{dedup_msa}" "!{dedup_msa.name}"
+        fi
     '''
 }
 
@@ -1044,7 +1063,15 @@ workflow {
     padded_msa_ch = PAD_ALIGNMENT.out.merged_msa.flatten()
 
     DEDUP_ALIGNMENT(padded_msa_ch)
-    MMSEQS_CLUSTERING(DEDUP_ALIGNMENT.out.dedup_msa)
+
+    // Keep clustered input small in test mode to speed up CI and avoid long MMseqs runs
+    cluster_input_ch = DEDUP_ALIGNMENT.out.dedup_msa
+    if (params.test == "1") {
+        TEST_SUBSAMPLE_CLUSTER_INPUT(cluster_input_ch)
+        cluster_input_ch = TEST_SUBSAMPLE_CLUSTER_INPUT.out.dedup_for_cluster
+    }
+
+    MMSEQS_CLUSTERING(cluster_input_ch)
     IQ_TREE(MMSEQS_CLUSTERING.out.mmseq_clusters)
     
     // Join the channels by segment name for USHER_PLACEMENT
@@ -1065,7 +1092,7 @@ workflow {
                 .tokenize('.')[0]
             [key, dir]
         }
-    dedup_with_key = DEDUP_ALIGNMENT.out.dedup_msa
+    dedup_with_key = cluster_input_ch
         .map { fasta ->
             def key = fasta.name
                 .replaceFirst(/_dedup\.fasta$/, '')
