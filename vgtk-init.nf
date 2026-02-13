@@ -12,7 +12,7 @@ def scriptDefinedParams = [
     "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table", "is_flu", "gene_info",
     "xml_dir", "update", "update_file",
     "mmseqs_min_seq_id", "mmseqs_threads", "mmseqs_trim_cds_file",
-    "gisaid_dir", "previous_db"
+    "gisaid_dir", "previous_db", "conda_path"
     // Add all parameter names defined above
 ]
 
