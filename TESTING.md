@@ -53,6 +53,37 @@ The pipeline includes automated validation tests that run when `--test 1` is set
 
 ## Running Tests
 
+## Python Unit Tests (new)
+
+Pytest-based unit tests now exist for the first two scripts in [scripts](scripts):
+- [scripts/AddMissingData.py](scripts/AddMissingData.py)
+- [scripts/BlastAlignment.py](scripts/BlastAlignment.py)
+
+Additional unit tests now also cover:
+- [scripts/CalcAlignmentCord.py](scripts/CalcAlignmentCord.py)
+- [scripts/CalcGenomeCords.py](scripts/CalcGenomeCords.py)
+
+Test files:
+- [tests/unit/test_add_missing_data.py](tests/unit/test_add_missing_data.py)
+- [tests/unit/test_blast_alignment.py](tests/unit/test_blast_alignment.py)
+- [tests/unit/test_calc_alignment_cord.py](tests/unit/test_calc_alignment_cord.py)
+- [tests/unit/test_calc_genome_cords.py](tests/unit/test_calc_genome_cords.py)
+
+Deterministic input/expected fixtures:
+- [test_data/unit/add_missing_data](test_data/unit/add_missing_data)
+- [test_data/unit/blast_alignment](test_data/unit/blast_alignment)
+- [test_data/unit/calc_alignment_cord](test_data/unit/calc_alignment_cord)
+- [test_data/unit/calc_genome_cords](test_data/unit/calc_genome_cords)
+
+Run locally:
+
+```bash
+pytest -q tests/unit
+```
+
+CI execution on every push/PR:
+- [.github/workflows/python-unit-tests.yml](.github/workflows/python-unit-tests.yml)
+
 ### For Segmented Virus (Influenza)
 ```bash
 nextflow run vgtk-init.nf -profile segmented_test
