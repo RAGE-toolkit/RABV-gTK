@@ -5,6 +5,8 @@ channels:
   - defaults
 dependencies:
   - python=3.10
+  - epa-ng
+  - gappa
   - mafft
   - requests
   - pandas
