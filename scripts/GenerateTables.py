@@ -1,199 +1,279 @@
 import os
-import re
 import csv
 import time
-import shutil
-import read_file
-import subprocess
 import urllib.error
+import read_file
 from Bio import Entrez
-from Bio.Seq import Seq
 from os.path import join
 from itertools import islice
 from argparse import ArgumentParser
-from collections import defaultdict
+
+'''
+	python GenerateTables.py -g tmp/update/GenBank-matrix/gB_matrix_raw.tsv -bh tmp/update/Blast/query_uniq_tophits.tsv -p tmp/update/Pad-alignment/alUnc509RefseqsMafftHandModified.fa -n tmp/update/Nextalign --update
+'''
 
 class GenerateTables:
-	def __init__(self, genbank_matrix, base_dir, output_dir, blast_hits, paded_aln, host_taxa_file, nextalign_dir, email):
-		self.genbank_matrix = genbank_matrix
-		self.base_dir = base_dir
-		self.output_dir = output_dir
-		self.blast_hits = blast_hits
-		self.paded_aln = paded_aln
-		self.host_taxa_file = host_taxa_file
-		self.nextalign_dir = nextalign_dir
-		self.email = email
-		os.makedirs(join(self.base_dir, self.output_dir), exist_ok=True)
+    def __init__(
+        self,
+        genbank_matrix,
+        base_dir,
+        output_dir,
+        blast_hits,
+        paded_aln,
+        nextalign_dir,
+        email,
+        update=False,
+    ):
+        self.genbank_matrix = genbank_matrix
+        self.base_dir = base_dir
+        self.output_dir = output_dir  # e.g. "Tables"
+        self.blast_hits = blast_hits
+        self.paded_aln = paded_aln
+        self.nextalign_dir = nextalign_dir
+        self.email = email
+        self.update = update
 
-	def fetch_taxonomy_details(self, tax_id, max_retries=5, delay=2):
-		Entrez.email = self.email
-		for attempt in range(1, max_retries + 1):
-			try:
-				handle = Entrez.efetch(db="taxonomy", id=tax_id, retmode="xml")
-				records = Entrez.read(handle)
-				time.sleep(1)
-				handle.close()
+        # NEW:
+        # Normal mode -> <base_dir>/<output_dir>   e.g. tmp/Tables
+        # Update mode  -> <base_dir>/update/<output_dir>  e.g. tmp/update/Tables
+        if self.update:
+            self.effective_output_dir = join("update", self.output_dir)
+        else:
+            self.effective_output_dir = self.output_dir
 
-				if records:
-					tax_record = records[0]
-					taxonomy_info = {
-						"Scientific Name": tax_record.get("ScientificName", "N/A"),
-						"Taxonomy ID": tax_record.get("TaxId", "N/A"),
-						"Rank": tax_record.get("Rank", "N/A"),
-						"Lineage": tax_record.get("Lineage", "N/A"),
-						"Other Names": tax_record.get("OtherNames", {}).get("Synonym", []),
-					}
-					return taxonomy_info
-				else:
-					return "No taxonomy details found for the given ID."
+        os.makedirs(join(self.base_dir, self.effective_output_dir), exist_ok=True)
 
-			except urllib.error.HTTPError as e:
-				print(f"HTTPError on attempt {attempt} for TaxID {tax_id}: {e}")
-				if attempt == max_retries:
-					print("Max retries reached. Skipping this TaxID.")
-					return {
-						"Scientific Name": "N/A",
-						"Taxonomy ID": tax_id,
-						"Rank": "N/A",
-						"Lineage": "N/A",
-						"Other Names": [],
-						}
-				else:
-					time.sleep(delay)
+    def fetch_taxonomy_details(self, tax_id, max_retries=5, delay=2):
+        """
+        Kept for potential future use, but not called currently.
+        """
+        Entrez.email = self.email
+        for attempt in range(1, max_retries + 1):
+            try:
+                handle = Entrez.efetch(db="taxonomy", id=tax_id, retmode="xml")
+                records = Entrez.read(handle)
+                time.sleep(1)
+                handle.close()
 
-	def host_taxa_file_check(self):
-		host_tax_id_list = []
-		host_file = join(self.base_dir, self.output_dir, self.host_taxa_file)
-    
-		if os.path.exists(host_file):
-			with open(host_file, newline='') as f:
-				reader = csv.DictReader(f, delimiter='\t', fieldnames=["taxonomy_id"])
-				for row in reader:
-					host_tax_id_list.append(row["taxonomy_id"])
+                if records:
+                    tax_record = records[0]
+                    taxonomy_info = {
+                        "Scientific Name": tax_record.get("ScientificName", "N/A"),
+                        "Taxonomy ID": tax_record.get("TaxId", "N/A"),
+                        "Rank": tax_record.get("Rank", "N/A"),
+                        "Lineage": tax_record.get("Lineage", "N/A"),
+                        "Other Names": tax_record.get("OtherNames", {}).get("Synonym", []),
+                    }
+                    return taxonomy_info
+                return "No taxonomy details found for the given ID."
 
-		return host_tax_id_list
+            except urllib.error.HTTPError as e:
+                print(f"HTTPError on attempt {attempt} for TaxID {tax_id}: {e}")
+                if attempt == max_retries:
+                    print("Max retries reached. Skipping this TaxID.")
+                    return {
+                        "Scientific Name": "N/A",
+                        "Taxonomy ID": tax_id,
+                        "Rank": "N/A",
+                        "Lineage": "N/A",
+                        "Other Names": [],
+                    }
+                time.sleep(delay)
 
-	def host_table(self):
-		existing_host_taxa_id = self.host_taxa_file_check()
-		taxa_file = join(self.base_dir, self.output_dir, self.host_taxa_file)
-		file_exists = os.path.isfile(taxa_file)
-		write_file = open(taxa_file, 'a')
-		if not file_exists or os.path.getsize(taxa_file) == 0:
-				header = ['taxonomy_id', 'scientific_name', 'rank', 'lineage']
-				write_file.write('\t'.join(header) + '\n')
+    @staticmethod
+    def load_blast_hits(blast_hit_file):
+        acc_dict = {}
+        with open(blast_hit_file) as f:
+            for line in f:
+                query, ref, score, strand = line.strip().split("\t")
+                acc_dict[query] = ref
+        return acc_dict
 
-		host_taxa_list = []
+    def created_alignment_table(self, blast_dict):
+        """
+        Writes:
+          - Normal mode: <base_dir>/<output_dir>/sequence_alignment.tsv
+          - Update mode : <base_dir>/update/<output_dir>/sequence_alignment.tsv
+        """
+        accessions = {}
+        missing_accs = []
+        seqs = {}
 
-		with open(self.genbank_matrix) as file:
-			csv_reader = csv.DictReader(file, delimiter='\t')
-			for row in csv_reader:
-				if row['host_taxa_id'] not in host_taxa_list:
-					if 'NA' not in row['host_taxa_id']:
-						if row['host_taxa_id'] not in existing_host_taxa_id:
-							host_taxa_list.append(row['host_taxa_id'])
+        out_path = join(self.base_dir, self.effective_output_dir, "sequence_alignment.tsv")
 
-		host_taxa_list = [item for item in host_taxa_list if item]
-		host_taxa_list = [x for x in host_taxa_list if x != 'nan']
-		print(f"\nTotal {len(host_taxa_list)} taxa id informations to fetch\n")	
-		for idx, each_host_taxaid in enumerate(host_taxa_list, start=1):
-			print(f" - Fetching taxa details for {each_host_taxaid} which is {idx} of {len(host_taxa_list)}")
-			host_taxa = self.fetch_taxonomy_details(each_host_taxaid)
-			tax_id = host_taxa['Taxonomy ID'] if host_taxa['Taxonomy ID'] is not None else 'NA'
-			scientific_name = host_taxa['Scientific Name'] if host_taxa['Scientific Name'] is not None else 'NA'
-			rank = host_taxa['Rank']	if host_taxa['Rank'] is not None else 'NA'
-			lineage = host_taxa['Lineage'] if host_taxa['Lineage'] is not None else 'NA'
-			write_file.write(tax_id + '\t' + scientific_name + '\t' + rank + '\t' + lineage + '\n')
-		write_file.close() 
+        header = ["sequence_id", "alignment_name", "alignment"]
+        with open(out_path, "w") as write_file:
+            write_file.write("\t".join(header) + "\n")
 
-	@staticmethod
-	def load_blast_hits(blast_hit_file):
-		acc_dict = {}
-		for i in open(blast_hit_file):
-			query, ref, score, strand = i.strip().split('\t')
-			acc_dict[query] = ref
-		return acc_dict
+            # 1) From padded alignment
+            rds = read_file.fasta(self.paded_aln)
+            for rows in rds:
+                seq_id = rows[0].strip()
+                seq = rows[1]
 
-	def created_alignment_table(self, blast_dict):
-		accessions = {}
-		missing_accs = []
-		seqs = {}
-		header = ["sequence_id", "alignment_name", "alignment"]
-		write_file = open(join(self.base_dir, self.output_dir, "sequence_alignment.tsv"), 'w')
-		write_file.write("\t".join(header) + "\n")
-		rds = read_file.fasta(self.paded_aln)
-		for rows in rds:
-			if rows[0] not in accessions:
-				seqs[rows[0]] = rows[1]
-				accessions[rows[0]] = 1
-				if rows[0] in blast_dict:
-					write_file.write(rows[0].strip() + '\t' + blast_dict[rows[0].strip()] + '\t' + rows[1] + '\n')
-				else:
-					missing_accs.append(rows[0].strip())
+                if seq_id in accessions:
+                    continue
 
-		for each_ref_aln in os.listdir(join(self.nextalign_dir)):
-			for each_ref_aln_file in os.listdir(join(self.nextalign_dir, each_ref_aln)):
-				rds = read_file.fasta(join(self.nextalign_dir, each_ref_aln, each_ref_aln_file, each_ref_aln_file + ".aligned.fasta"))
-				for rows in rds:
-					if rows[0].strip() in missing_accs:
-						write_file.write(rows[0].strip() + '\t' + each_ref_aln_file + '\t' + seqs[rows[0]] + '\n')
-						accessions[rows[0].strip()] = 1
+                seqs[seq_id] = seq
+                accessions[seq_id] = 1
 
-			
-		write_file.close()
-		print("Removing the Sequence redundancy")
-		self.remove_redundancy_from_alignment(join(self.base_dir, self.output_dir, "sequence_alignment.tsv"))
+                if seq_id in blast_dict:
+                    write_file.write(seq_id + "\t" + blast_dict[seq_id] + "\t" + seq + "\n")
+                else:
+                    missing_accs.append(seq_id)
 
-	def remove_redundancy_from_alignment(self, file_path, delimiter="\t"):
-		seen = set()
-		lines_to_write = []
+            # 2) Fill missing ones from nextalign results
+            for each_ref_aln in os.listdir(self.nextalign_dir):
+                ref_dir = join(self.nextalign_dir, each_ref_aln)
+                if not os.path.isdir(ref_dir):
+                    continue
 
-		with open(file_path, "r") as infile:
-			for line in infile:
-				if not line.strip():
-					continue  # skip empty lines
-				key = line.strip().split(delimiter)[0]
-				if key not in seen:
-					seen.add(key)
-					lines_to_write.append(line)
+                for each_ref_aln_file in os.listdir(ref_dir):
+                    aln_dir = join(ref_dir, each_ref_aln_file)
+                    if not os.path.isdir(aln_dir):
+                        continue
 
-		with open(file_path, "w") as outfile:
-			outfile.writelines(lines_to_write)
-		print(f"Redundancy removed. File updated: {file_path}")
+                    aln_fa = join(aln_dir, each_ref_aln_file + ".aligned.fasta")
+                    if not os.path.exists(aln_fa):
+                        continue
 
-	def create_insertion_table(self):
-		write_file = open(join(self.base_dir, self.output_dir, "insertions.tsv"), 'w')
-		header = ["accession", "reference", "insertion"]
-		write_file.write("\t".join(header) + "\n")
-		for aln_dir in os.listdir(self.nextalign_dir):
-			for each_aln_dir in os.listdir(join(self.nextalign_dir, aln_dir)):
-				with open(join(self.nextalign_dir, aln_dir, each_aln_dir, each_aln_dir + ".insertions.csv")) as f:
-					for each_line in islice(f, 1, None):
-						accession, insertion, aa_insertion = each_line.strip().split(",")
-						if len(insertion) > 0:
-							data = [accession, each_aln_dir, insertion]
-							write_file.write("\t".join(data) + "\n")
+                    rds2 = read_file.fasta(aln_fa)
+                    for rows2 in rds2:
+                        seq_id2 = rows2[0].strip()
+                        if seq_id2 in missing_accs:
+                            if seq_id2 in seqs:
+                                write_file.write(
+                                    seq_id2 + "\t" + each_ref_aln_file + "\t" + seqs[seq_id2] + "\n"
+                                )
+                                accessions[seq_id2] = 1
 
-		write_file.close()
-					
-	def process(self):
-		
-		blast_dictionary = self.load_blast_hits(self.blast_hits)
-		#self.load_gb_matrix()
-		self.created_alignment_table(blast_dictionary)
-		#self.host_table()
-		self.create_insertion_table()
+        print("Removing the Sequence redundancy")
+        self.remove_redundancy_from_alignment(out_path)
+
+    def remove_redundancy_from_alignment(self, file_path, delimiter="\t"):
+        """
+        Removes duplicate sequence_id (column 1). Keeps first occurrence. Preserves header.
+        """
+        seen = set()
+        lines_to_write = []
+
+        with open(file_path, "r") as infile:
+            header = infile.readline()
+            if header:
+                lines_to_write.append(header)
+
+            for line in infile:
+                if not line.strip():
+                    continue
+                key = line.strip().split(delimiter)[0]
+                if key not in seen:
+                    seen.add(key)
+                    lines_to_write.append(line)
+
+        with open(file_path, "w") as outfile:
+            outfile.writelines(lines_to_write)
+
+        print(f"Redundancy removed. File updated: {file_path}")
+
+    def create_insertion_table(self):
+        """
+        Writes:
+          - Normal mode: <base_dir>/<output_dir>/insertions.tsv
+          - Update mode : <base_dir>/update/<output_dir>/insertions.tsv
+        """
+        out_path = join(self.base_dir, self.effective_output_dir, "insertions.tsv")
+
+        header = ["accession", "reference", "insertion"]
+        with open(out_path, "w") as write_file:
+            write_file.write("\t".join(header) + "\n")
+
+            for aln_dir in os.listdir(self.nextalign_dir):
+                aln_dir_path = join(self.nextalign_dir, aln_dir)
+                if not os.path.isdir(aln_dir_path):
+                    continue
+
+                for each_aln_dir in os.listdir(aln_dir_path):
+                    each_aln_path = join(aln_dir_path, each_aln_dir)
+                    if not os.path.isdir(each_aln_path):
+                        continue
+
+                    ins_csv = join(each_aln_path, each_aln_dir + ".insertions.csv")
+                    if not os.path.exists(ins_csv):
+                        continue
+
+                    with open(ins_csv) as f:
+                        for each_line in islice(f, 1, None):  # skip header
+                            parts = each_line.strip().split(",")
+                            if len(parts) < 2:
+                                continue
+                            accession = parts[0].strip()
+                            insertion = parts[1].strip()
+                            if insertion:
+                                data = [accession, each_aln_dir, insertion]
+                                write_file.write("\t".join(data) + "\n")
+
+    def process(self):
+        out_dir_abs = join(self.base_dir, self.effective_output_dir)
+        print(f"[mode] update={self.update} -> writing outputs to: {out_dir_abs}")
+
+        blast_dictionary = self.load_blast_hits(self.blast_hits)
+        self.created_alignment_table(blast_dictionary)
+        self.create_insertion_table()
+
 
 if __name__ == "__main__":
-	parser = ArgumentParser(description='Generating tables sqlite DB')
-	parser.add_argument('-g', '--genbank_matrix', help='Genbank matrix table', default="tmp/GenBank-matrix/gB_matrix_raw.tsv")
-	parser.add_argument('-b', '--base_dir', help='base directory', default="tmp")
-	parser.add_argument('-o', '--output_dir', help='output directory to store all the db-ready tsv files', default="Tables")
-	parser.add_argument('-f', '--host_taxa', help='Host taxa file name, default="host_taxa.tsv"', default="host_taxa.tsv")
-	parser.add_argument('-bh', '--blast_hits', help='BLASTN unique hits', default="tmp/Blast/query_uniq_tophits.tsv")
-	parser.add_argument('-p', '--paded_aln', help='Paded alignment file', default="tmp/Pad-alignment/NC_001542.aligned_merged_MSA.fasta")
-	parser.add_argument('-n', '--nextalign_dir', help='Nextalign aligned directory', default="tmp/Nextalign/")
-	parser.add_argument('-e', '--email', help='Email id', default='your-email@example.com')
-	args = parser.parse_args()
-	
-	processor = GenerateTables(args.genbank_matrix, args.base_dir, args.output_dir, args.blast_hits, args.paded_aln, args.host_taxa, args.nextalign_dir, args.email)
-	processor.process()
+    parser = ArgumentParser(description="Generating tables sqlite DB")
+
+    parser.add_argument(
+        "-g",
+        "--genbank_matrix",
+        help="Genbank matrix table",
+        default="tmp/GenBank-matrix/gB_matrix_raw.tsv",
+    )
+    parser.add_argument("-b", "--base_dir", help="base directory", default="tmp")
+    parser.add_argument(
+        "-o",
+        "--output_dir",
+        help='output directory name (default: "Tables"). '
+             'In update mode outputs go to: <base_dir>/update/<output_dir>/',
+        default="Tables",
+    )
+    parser.add_argument(
+        "-bh",
+        "--blast_hits",
+        help="BLASTN unique hits",
+        default="tmp/Blast/query_uniq_tophits.tsv",
+    )
+    parser.add_argument(
+        "-p",
+        "--paded_aln",
+        help="Paded alignment file",
+        default="tmp/Pad-alignment/NC_001542.aligned_merged_MSA.fasta",
+    )
+    parser.add_argument(
+        "-n",
+        "--nextalign_dir",
+        help="Nextalign aligned directory",
+        default="tmp/Nextalign/",
+    )
+    parser.add_argument("-e", "--email", help="Email id", default="your-email@example.com")
+
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="When set, write outputs into <base_dir>/update/<output_dir>/ (e.g. tmp/update/Tables/).",
+    )
+
+    args = parser.parse_args()
+
+    processor = GenerateTables(
+        args.genbank_matrix,
+        args.base_dir,
+        args.output_dir,
+        args.blast_hits,
+        args.paded_aln,
+        args.nextalign_dir,
+        args.email,
+        update=args.update,
+    )
+    processor.process()

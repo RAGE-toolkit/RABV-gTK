@@ -13,7 +13,19 @@ from argparse import ArgumentParser
 
 
 class ValidateMatrix:
-    def __init__(self, url, taxa_path, base_dir, output_dir, gb_matrix, country_file, assets, host_map, country_map):
+    def __init__(
+        self,
+        url,
+        taxa_path,
+        base_dir,
+        output_dir,
+        gb_matrix,
+        country_file,
+        assets,
+        host_map,
+        country_map,
+        update_mode=False,   # NEW
+    ):
         self.url = url
         self.taxa_path = taxa_path
         self.base_dir = base_dir
@@ -23,11 +35,18 @@ class ValidateMatrix:
         self.assets = assets
         self.host_map_path = host_map
         self.country_map_path = country_map
+        self.update_mode = update_mode  # NEW
 
         self.dump_file = "taxadump.tar.gz"
         self.md5_url = f"{self.url}.md5"
 
-        os.makedirs(join(self.base_dir, self.output_dir), exist_ok=True)
+        # NEW: route output dir to tmp/update/<output_dir> when update_mode is on
+        if self.update_mode:
+            self.outdir = join(self.base_dir, "update", self.output_dir)
+        else:
+            self.outdir = join(self.base_dir, self.output_dir)
+
+        os.makedirs(self.outdir, exist_ok=True)
         os.makedirs(join(self.base_dir, self.taxa_path), exist_ok=True)
 
         # mapping stats
@@ -53,7 +72,7 @@ class ValidateMatrix:
         response = requests.get(self.url, stream=True, timeout=300)
         response.raise_for_status()
         outp = join(self.base_dir, self.taxa_path, self.dump_file)
-        with open(outp, 'wb') as file:
+        with open(outp, "wb") as file:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     file.write(chunk)
@@ -80,40 +99,17 @@ class ValidateMatrix:
     def read_tar(self):
         print(f"Extracting {self.dump_file}")
         tar_path = join(self.base_dir, self.taxa_path, self.dump_file)
-        with tarfile.open(tar_path, 'r:*') as tar:
-            # names.dmp → write tabbed form: tax_id \t name_txt \t unique_name \t name_class
-            names_member = tar.getmember('names.dmp')
-            with tar.extractfile(names_member) as fh, \
-                open(join(self.base_dir, self.taxa_path, "names.dmp"), 'wb') as write_taxa:
+        with tarfile.open(tar_path, "r:*") as tar:
+            names_member = tar.getmember("names.dmp")
+            with tar.extractfile(names_member) as fh, open(join(self.base_dir, self.taxa_path, "names.dmp"), "wb") as write_taxa:
                 write_taxa.write(fh.read())
-                #for line in fh:
-                #    split_line = [p.strip() for p in line.decode('utf-8').split('|') if p is not None]
-                #    write_taxa.write("\t".join(split_line) + '\n')
 
-            nodes_member = tar.getmember('nodes.dmp')
-            with tar.extractfile(nodes_member) as fh, \
-                open(join(self.base_dir, self.taxa_path, "nodes.dmp"), "wb") as f:
+            nodes_member = tar.getmember("nodes.dmp")
+            with tar.extractfile(nodes_member) as fh, open(join(self.base_dir, self.taxa_path, "nodes.dmp"), "wb") as f:
                 f.write(fh.read())
         print("Extraction complete.")
 
     # ---------------- Build taxa dict ----------------
-    """
-    def taxa_name_dump_to_dict(self):
-        taxa_dump = {}
-        scientific_name = {}
-        file_name = join(self.base_dir, self.taxa_path, "names.dmp")
-        with open(file_name) as f:
-            for each_line in f:
-                split_line = each_line.strip().split('\t')
-                if 'genbank common name' in split_line or 'common name' in split_line or 'scientific name' in split_line or 'synonym' in split_line:
-                    taxa_id = split_line[0]
-                    name = split_line[1]
-                    taxa_dump[name] = taxa_id
-                    if 'scientific name' in split_line:
-                        scientific_name[taxa_id] = name
-        return taxa_dump, scientific_name
-
-    """
     def taxa_name_dump_to_dict(self, *, allowed_classes=None, case_insensitive=True):
         if allowed_classes is None:
             allowed_classes = {
@@ -123,11 +119,10 @@ class ValidateMatrix:
                 "genbank common name",
                 "blast name",
                 "equivalent name",
-             }
+            }
 
         file_path = join(self.base_dir, self.taxa_path, "names.dmp")
 
-        # autodetect gzip
         opener = gzip.open if file_path.endswith(".gz") else open
         taxa_dump = {}
         scientific = {}
@@ -138,22 +133,17 @@ class ValidateMatrix:
                 if not line:
                     continue
 
-                # names.dmp is pipe-delimited with trailing pipe
-                # e.g. '2\t|\tBacteria\t|\tBacteria <bacteria>\t|\tscientific name\t|'
                 parts = [p.strip() for p in line.split("|")]
                 if len(parts) < 4:
-                    continue  # malformed line
+                    continue
 
                 tax_id, name_txt, unique_name, name_class = parts[0], parts[1], parts[2], parts[3]
 
                 if name_class == "scientific name":
-                    # last write wins if duplicated; that’s fine for NCBI
                     scientific[tax_id] = name_txt
 
                 if name_class in allowed_classes:
                     key = name_txt.lower() if case_insensitive else name_txt
-                    # If a name maps to multiple tax_ids, last one wins.
-                    # If you’d rather keep *all* matches, store a set instead.
                     taxa_dump[key] = tax_id
 
         return taxa_dump, scientific
@@ -164,17 +154,17 @@ class ValidateMatrix:
         sample = f.read(4096)
         f.seek(0)
         try:
-            dialect = csv.Sniffer().sniff(sample, delimiters=[',', '\t', ';', '|'])
+            dialect = csv.Sniffer().sniff(sample, delimiters=[",", "\t", ";", "|"])
             delim = dialect.delimiter
         except Exception:
-            delim = '\t' if '\t' in sample and ',' not in sample else ','
+            delim = "\t" if "\t" in sample and "," not in sample else ","
         reader = csv.DictReader(f, delimiter=delim)
         return reader, delim, f
 
     # ---------------- Read mapping files ----------------
     def read_mapping_file(self, path, key_col, value_col):
         mapping = {}
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for each_line in islice(f, 1, None):
                 source, replaced_by = each_line.strip().split("\t")
                 mapping[source] = replaced_by
@@ -191,15 +181,15 @@ class ValidateMatrix:
             if not reader.fieldnames:
                 raise ValueError(f"M49 file '{infile}' is empty or missing headers.")
             headers = [h.strip().lower() for h in reader.fieldnames]
-            if 'display_name' not in headers or 'm49_code' not in headers:
+            if "display_name" not in headers or "m49_code" not in headers:
                 raise ValueError(f"M49 file '{infile}' must contain headers 'display_name' and 'm49_code'.")
 
-            display_key = reader.fieldnames[headers.index('display_name')]
-            m49_key = reader.fieldnames[headers.index('m49_code')]
+            display_key = reader.fieldnames[headers.index("display_name")]
+            m49_key = reader.fieldnames[headers.index("m49_code")]
 
             for row in reader:
-                name = (row.get(display_key) or '').strip()
-                code = (row.get(m49_key) or '').strip()
+                name = (row.get(display_key) or "").strip()
+                code = (row.get(m49_key) or "").strip()
                 if name and code:
                     out[name] = code
         print(f"Loaded {len(out)} M49 countries from {infile} (delimiter='{delim}')")
@@ -217,7 +207,7 @@ class ValidateMatrix:
         s = str(date_str).strip()
         if not s:
             return "NA"
-        for fmt in ('%d-%b-%Y', '%b-%Y', '%Y'):
+        for fmt in ("%d-%b-%Y", "%b-%Y", "%Y"):
             try:
                 datetime.strptime(s, fmt)
                 return "Yes"
@@ -228,7 +218,7 @@ class ValidateMatrix:
     def validate_country(self, country, country_dict, country_map):
         if self._is_na(country):
             return "NA", ""
-        original = str(country).split(':')[0].strip()
+        original = str(country).split(":")[0].strip()
         mapped = country_map.get(original, original)
         comment = ""
         if mapped != original:
@@ -243,10 +233,13 @@ class ValidateMatrix:
         if self._is_na(host_value):
             return ("NA", "NA", "NA", comment)
 
-        host = re.sub(r'\s*\([^)]*\)', '', str(host_value).strip())
+        host = re.sub(r"\s*\([^)]*\)", "", str(host_value).strip())
 
-        if host in taxa_dict:
-            taxaid = taxa_dict[host]
+        # taxa_dict uses lowercase keys (case_insensitive=True)
+        host_key = host.lower()
+
+        if host_key in taxa_dict:
+            taxaid = taxa_dict[host_key]
             sci_name = scientific_dict.get(taxaid, "NA")
             return ("Yes", taxaid, sci_name, comment)
 
@@ -254,8 +247,9 @@ class ValidateMatrix:
         if repl:
             self.host_mapped_count += 1
             comment = f"Host mapped from mapping file: '{host}' -> '{repl}'"
-            if repl in taxa_dict:
-                taxaid = taxa_dict[repl]
+            repl_key = repl.lower()
+            if repl_key in taxa_dict:
+                taxaid = taxa_dict[repl_key]
                 sci_name = scientific_dict.get(taxaid, "NA")
                 return ("Yes", taxaid, sci_name, comment)
             else:
@@ -267,17 +261,22 @@ class ValidateMatrix:
     def read_meta_sheet(self, country_dict, taxa_dict, host_map, country_map):
         print(f"Reading meta data {self.gb_matrix}")
 
-        with open(self.gb_matrix, encoding="utf-8", newline='') as f_in:
-            reader = csv.DictReader(f_in, delimiter='\t')
+        with open(self.gb_matrix, encoding="utf-8", newline="") as f_in:
+            reader = csv.DictReader(f_in, delimiter="\t")
             rows = [row for row in reader]
             in_headers = reader.fieldnames
 
         def is_processed(row):
-            val = str(row.get('exclusion_status', '')).strip()
-            return val != '1'
+            val = str(row.get("exclusion_status", "")).strip()
+            return val != "1"
 
-        validated_cols = ['collection_date_validated', 'country_validated',
-                          'host_validated', 'host_taxa_id', 'host_scientific_name']
+        validated_cols = [
+            "collection_date_validated",
+            "country_validated",
+            "host_validated",
+            "host_taxa_id",
+            "host_scientific_name",
+        ]
         out_headers = [h for h in in_headers if h not in validated_cols] + validated_cols
 
         total = sum(1 for r in rows if is_processed(r))
@@ -286,67 +285,67 @@ class ValidateMatrix:
 
         failed_rows = []
         for row in rows:
-            row_comment = row.get('comment', '').strip()
+            row_comment = row.get("comment", "").strip()
             if is_processed(row):
-                # Clean up NA
                 if row_comment.upper() == "NA":
                     row_comment = ""
 
-                # Helper to avoid duplicates
                 def add_unique_comment(existing, new_info):
                     if not new_info:
-                        return existing.strip(' ;|')
-                    existing_norm = re.sub(r'\s+', ' ', existing.lower())
-                    new_norm = re.sub(r'\s+', ' ', new_info.lower())
+                        return existing.strip(" ;|")
+                    existing_norm = re.sub(r"\s+", " ", existing.lower())
+                    new_norm = re.sub(r"\s+", " ", new_info.lower())
                     if new_norm in existing_norm:
-                        return existing.strip(' ;|')
+                        return existing.strip(" ;|")
                     if existing.strip() == "":
                         return new_info.strip()
                     else:
                         return f"{existing.strip(' ;|')}; {new_info.strip()}"
 
-                # Date
-                row['collection_date_validated'] = self._validate_date_str(row.get('collection_date'))
+                row["collection_date_validated"] = self._validate_date_str(row.get("collection_date"))
 
-                # Country
-                country_validated, country_comment = self.validate_country(row.get('country'), country_dict, country_map)
-                row['country_validated'] = country_validated
+                country_validated, country_comment = self.validate_country(row.get("country"), country_dict, country_map)
+                row["country_validated"] = country_validated
                 row_comment = add_unique_comment(row_comment, country_comment)
 
-                # Host
-                host_validated, host_taxid, host_sci, host_comment = self.resolve_host(row.get('host'), taxa_dict, host_map)
-                row['host_validated'] = host_validated
-                row['host_taxa_id'] = host_taxid
-                row['host_scientific_name'] = host_sci
+                host_validated, host_taxid, host_sci, host_comment = self.resolve_host(row.get("host"), taxa_dict, host_map)
+                row["host_validated"] = host_validated
+                row["host_taxa_id"] = host_taxid
+                row["host_scientific_name"] = host_sci
                 row_comment = add_unique_comment(row_comment, host_comment)
 
-                # Cleanup
-                row_comment = re.sub(r'(^NA[;| ]*|[;| ]*NA$)', '', row_comment, flags=re.IGNORECASE).strip(' ;|')
-                row['comment'] = row_comment
+                row_comment = re.sub(r"(^NA[;| ]*|[;| ]*NA$)", "", row_comment, flags=re.IGNORECASE).strip(" ;|")
+                row["comment"] = row_comment
             else:
                 for c in validated_cols:
                     row[c] = ""
 
             if is_processed(row):
-                if (row['collection_date_validated'] != "Yes") or \
-                   (row['country_validated'] == "NA") or \
-                   (row['host_validated'] != "Yes"):
+                if (row["collection_date_validated"] != "Yes") or (row["country_validated"] == "NA") or (row["host_validated"] != "Yes"):
                     failed_rows.append(row)
 
-        outdir = join(self.base_dir, self.output_dir)
-        os.makedirs(outdir, exist_ok=True)
-        validated_path = join(outdir, 'gB_matrix_validated.tsv')
-        with open(validated_path, 'w', encoding='utf-8', newline='') as f_out:
-            writer = csv.DictWriter(f_out, fieldnames=out_headers, delimiter='\t', extrasaction='ignore')
+        os.makedirs(self.outdir, exist_ok=True)
+
+        validated_path = join(self.outdir, "gB_matrix_validated.tsv")
+        with open(validated_path, "w", encoding="utf-8", newline="") as f_out:
+            writer = csv.DictWriter(f_out, fieldnames=out_headers, delimiter="\t", extrasaction="ignore")
             writer.writeheader()
             for row in rows:
                 writer.writerow(row)
 
-        failed_fields = ['primary_accession', 'collection_date_validated', 'host_validated', 'country_validated',
-                         'host', 'host_scientific_name', 'country', 'collection_date']
-        failed_path = join(outdir, 'gB_matrix_failed_validation.tsv')
-        with open(failed_path, 'w', encoding='utf-8', newline='') as f_fail:
-            writer = csv.DictWriter(f_fail, fieldnames=failed_fields, delimiter='\t', extrasaction='ignore')
+        failed_fields = [
+            "primary_accession",
+            "collection_date_validated",
+            "host_validated",
+            "country_validated",
+            "host",
+            "host_scientific_name",
+            "country",
+            "collection_date",
+        ]
+        failed_path = join(self.outdir, "gB_matrix_failed_validation.tsv")
+        with open(failed_path, "w", encoding="utf-8", newline="") as f_fail:
+            writer = csv.DictWriter(f_fail, fieldnames=failed_fields, delimiter="\t", extrasaction="ignore")
             writer.writeheader()
             for row in failed_rows:
                 writer.writerow(row)
@@ -358,10 +357,11 @@ class ValidateMatrix:
         print(f"Missing information (any failed): {len(failed_rows)}")
         print(f"Host names corrected via mapping file: {self.host_mapped_count}")
         print(f"Country names corrected via mapping file: {self.country_mapped_count}")
-        print(f"Results saved to {outdir}\n")
+        print(f"Results saved to {self.outdir}\n")
 
-        with open(self.gb_matrix, 'w', encoding='utf-8', newline='') as f_overwrite:
-            writer = csv.DictWriter(f_overwrite, fieldnames=out_headers, delimiter='\t', extrasaction='ignore')
+        # overwrite input gb_matrix in-place (existing behavior)
+        with open(self.gb_matrix, "w", encoding="utf-8", newline="") as f_overwrite:
+            writer = csv.DictWriter(f_overwrite, fieldnames=out_headers, delimiter="\t", extrasaction="ignore")
             writer.writeheader()
             for row in rows:
                 writer.writerow(row)
@@ -377,25 +377,40 @@ class ValidateMatrix:
 
 
 def main():
-    parser = ArgumentParser(description='Validate the gB_matrix file based on country, date, and host columns.')
-    parser.add_argument('-u', '--url', default="https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz")
-    parser.add_argument('-t', '--taxa_path', default='Taxa')
-    parser.add_argument('-b', '--base_dir', default='tmp')
-    parser.add_argument('-o', '--output_dir', default='Validate-matrix')
-    parser.add_argument('-g', '--gb_matrix', default="tmp/GenBank-matrix/gB_matrix_raw.tsv")
-    parser.add_argument('-c', '--country', default='assets/m49_country.csv')
-    parser.add_argument('-a', '--assets', default='assets/')
-    parser.add_argument('-m', '--host_map', default="generic/rabv/host_mapping.tsv")
-    parser.add_argument('-n', '--country_map', default="generic/rabv/country_mapping.tsv")
+    parser = ArgumentParser(description="Validate the gB_matrix file based on country, date, and host columns.")
+    parser.add_argument("-u", "--url", help="NCBI taxadump url for file downloading", default="https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz")
+    parser.add_argument("-t", "--taxa_path", help="The directory where the NCBI taxa dump to be downloaded", default="Taxa")
+    parser.add_argument("-b", "--base_dir", default="tmp")
+    parser.add_argument("-o", "--output_dir", default="Validate-matrix")
+    parser.add_argument("-g", "--gb_matrix", default="tmp/GenBank-matrix/gB_matrix_raw.tsv")
+    parser.add_argument("-c", "--country", default="assets/m49_country.csv")
+    parser.add_argument("-a", "--assets", default="assets/")
+    parser.add_argument("-m", "--host_map", default="generic/rabv/host_mapping.tsv")
+    parser.add_argument("-n", "--country_map", default="generic/rabv/country_mapping.tsv")
+
+    # NEW: update flag
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="If set, write ValidateMatrix outputs under tmp/update/<output_dir> (e.g., tmp/update/Validate-matrix).",
+    )
+
     args = parser.parse_args()
 
     validator = ValidateMatrix(
-        args.url, args.taxa_path, args.base_dir, args.output_dir,
-        args.gb_matrix, args.country, args.assets, args.host_map, args.country_map
+        args.url,
+        args.taxa_path,
+        args.base_dir,
+        args.output_dir,
+        args.gb_matrix,
+        args.country,
+        args.assets,
+        args.host_map,
+        args.country_map,
+        update_mode=args.update,  # NEW
     )
     validator.process()
 
 
 if __name__ == "__main__":
     main()
-
