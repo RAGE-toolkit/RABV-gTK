@@ -6,7 +6,7 @@
 // use condaMamba for mamba if installed (check with mamba --version)
 
 scripts_dir     = "${projectDir}/scripts"
-params.max_threads =  8
+params.max_threads = params.max_threads ?: Math.min(8, Runtime.getRuntime().availableProcessors())
 
 def parsePositiveInt = { value, paramName ->
     try {
