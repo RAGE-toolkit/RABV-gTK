@@ -118,14 +118,23 @@ class CreateSqliteDB:
 				excluded_records.append({"primary_accession": fid, "reason": "alignment_filtering"})
 		
 		df_meta_data = pd.read_csv(join(self.meta_data), sep="\t", dtype=str)
+
+		# Track reference/master rows so they are always retained in meta_data
+		acc_type_col = "accession_type" if "accession_type" in df_meta_data.columns else None
+		if acc_type_col:
+			acc_type_norm = df_meta_data[acc_type_col].fillna("").str.strip().str.lower()
+			is_ref_or_master = acc_type_norm.isin(["reference", "master"])
+		else:
+			is_ref_or_master = pd.Series(False, index=df_meta_data.index)
 		
-		# Exclude filtered sequences from meta_data
+		# Exclude filtered sequences from meta_data, but never remove reference/master rows
 		if filtered_ids and "primary_accession" in df_meta_data.columns:
 			before_count = len(df_meta_data)
-			df_meta_data = df_meta_data[~df_meta_data["primary_accession"].isin(filtered_ids)]
+			remove_mask = df_meta_data["primary_accession"].isin(filtered_ids) & (~is_ref_or_master)
+			df_meta_data = df_meta_data[~remove_mask]
 			after_count = len(df_meta_data)
 			if before_count != after_count:
-				print(f"[CreateSqliteDB] Removed {before_count - after_count} filtered sequences from meta_data")
+				print(f"[CreateSqliteDB] Removed {before_count - after_count} filtered non-reference sequences from meta_data")
 		
 		# Collect exclusions from meta_data (e.g. invalid division)
 		if "exclusion" in df_meta_data.columns:
@@ -139,9 +148,13 @@ class CreateSqliteDB:
 					acc = row.get("primary_accession", "")
 					if acc:
 						excluded_records.append({"primary_accession": acc, "reason": row["exclusion"]})
-				
-				# Remove them from main meta_data
-				df_meta_data = df_meta_data[~exclusion_mask]
+
+				# Remove excluded rows from main meta_data, but never remove reference/master rows
+				remove_mask = exclusion_mask & (~is_ref_or_master)
+				df_meta_data = df_meta_data[~remove_mask]
+				retained_refs = (exclusion_mask & is_ref_or_master).sum()
+				if retained_refs:
+					print(f"[CreateSqliteDB] Retained {retained_refs} reference/master rows despite exclusion flags")
 
 		df_meta_data = self._add_cluster_column(df_meta_data)
 		df_features = pd.read_csv(join(self.features), sep="\t")

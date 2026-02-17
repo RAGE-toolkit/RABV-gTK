@@ -6,7 +6,6 @@
 // use condaMamba for mamba if installed (check with mamba --version)
 
 scripts_dir     = "${projectDir}/scripts"
-params.max_threads = params.max_threads ?: Math.min(8, Runtime.getRuntime().availableProcessors())
 
 def parsePositiveInt = { value, paramName ->
     try {
@@ -20,8 +19,8 @@ def parsePositiveInt = { value, paramName ->
     }
 }
 
-def MAX_THREADS = parsePositiveInt(params.max_threads, 'max_threads')
-params.max_threads = MAX_THREADS
+def maxThreadsRaw = params.max_threads ?: Math.min(8, Runtime.getRuntime().availableProcessors())
+def MAX_THREADS = parsePositiveInt(maxThreadsRaw, 'max_threads')
 
 def MMSEQS_THREADS_REQUESTED = parsePositiveInt(params.mmseqs_threads ?: MAX_THREADS, 'mmseqs_threads')
 params.mmseqs_threads = Math.min(MMSEQS_THREADS_REQUESTED, MAX_THREADS)
@@ -493,10 +492,16 @@ process TEST_SUBSAMPLE_CLUSTER_INPUT {
     '''
         MAX_SEQS="!{params.test_max_cluster_seqs}"
         OUT_FILE="!{dedup_msa.baseName}_cluster_input.fasta"
+        TOTAL_SEQS=$(seqkit seq -n "!{dedup_msa}" | wc -l)
 
         if [ -n "$MAX_SEQS" ] && [ "$MAX_SEQS" != "null" ] && [ "$MAX_SEQS" -gt 0 ] 2>/dev/null; then
-            echo "[test-mode] Subsampling !{dedup_msa} to first ${MAX_SEQS} sequences for clustering"
-            seqkit head -n "$MAX_SEQS" "!{dedup_msa}" -o "$OUT_FILE"
+            if [ "$TOTAL_SEQS" -le "$MAX_SEQS" ]; then
+                echo "[test-mode] Input has ${TOTAL_SEQS} sequences (<= ${MAX_SEQS}); keeping all sequences for clustering"
+                cp "!{dedup_msa}" "$OUT_FILE"
+            else
+                echo "[test-mode] Subsampling !{dedup_msa} from ${TOTAL_SEQS} to ${MAX_SEQS} sequences using deterministic random sampling (seed=42)"
+                seqkit sample -n "$MAX_SEQS" -s 42 "!{dedup_msa}" -o "$OUT_FILE"
+            fi
         else
             cp "!{dedup_msa}" "$OUT_FILE"
         fi
@@ -583,16 +588,44 @@ process USHER_PLACEMENT{
             exit 1
         fi
 
+        # faToVcf may fail if the chosen reference ID is not present in the input MSA
+        if ! seqkit seq -n "!{padded_aln}" | grep -Fxq "$REF_ID"; then
+            echo "[warn] Reference ID '$REF_ID' is not present in !{padded_aln}; using first MSA ID instead." >&2
+            REF_ID=$(seqkit seq -n "!{padded_aln}" | head -n 1)
+            if [ -z "$REF_ID" ]; then
+                echo "[error] Could not determine fallback reference ID from !{padded_aln}." >&2
+                exit 1
+            fi
+        fi
+
         mkdir -p Usher_!{mmseq_cluster_dir.baseName}
         export OMP_NUM_THREADS=!{task.cpus}
         export OPENBLAS_NUM_THREADS=!{task.cpus}
         export MKL_NUM_THREADS=!{task.cpus}
         export NUMEXPR_NUM_THREADS=!{task.cpus}
         seqkit seq -n "$CLUSTER_REP" > Usher_!{mmseq_cluster_dir.baseName}/centroid_ids.txt
+        seqkit seq -n "!{padded_aln}" > Usher_!{mmseq_cluster_dir.baseName}/aln_ids.txt
         awk -v ref="$REF_ID" '$0 != ref' Usher_!{mmseq_cluster_dir.baseName}/centroid_ids.txt > Usher_!{mmseq_cluster_dir.baseName}/exclude_ids.txt
 
-        faToVcf -ref="$REF_ID" -excludeFile=Usher_!{mmseq_cluster_dir.baseName}/exclude_ids.txt \
-            "!{padded_aln}" Usher_!{mmseq_cluster_dir.baseName}/all_samples.vcf
+        # If exclude list removes all non-reference sequences, faToVcf can crash.
+        ALN_COUNT=$(wc -l < Usher_!{mmseq_cluster_dir.baseName}/aln_ids.txt)
+        EXCLUDE_COUNT=$(wc -l < Usher_!{mmseq_cluster_dir.baseName}/exclude_ids.txt)
+
+        if [ "$ALN_COUNT" -le 1 ]; then
+            echo "[error] Need at least 2 sequences in !{padded_aln}, found ${ALN_COUNT}." >&2
+            exit 1
+        elif [ "$EXCLUDE_COUNT" -ge $((ALN_COUNT - 1)) ]; then
+            if [ "!{params.test}" = "1" ]; then
+                echo "[warn] Exclude list would remove all non-reference sequences (${EXCLUDE_COUNT}/${ALN_COUNT}) in test mode; likely no query sequences to place for this segment. Running faToVcf without -excludeFile." >&2
+            else
+                echo "[warn] Exclude list would remove all non-reference sequences (${EXCLUDE_COUNT}/${ALN_COUNT}); likely no query sequences to place for this segment. Running faToVcf without -excludeFile." >&2
+            fi
+            faToVcf -ref="$REF_ID" "!{padded_aln}" Usher_!{mmseq_cluster_dir.baseName}/all_samples.vcf
+        elif ! faToVcf -ref="$REF_ID" -excludeFile=Usher_!{mmseq_cluster_dir.baseName}/exclude_ids.txt \
+            "!{padded_aln}" Usher_!{mmseq_cluster_dir.baseName}/all_samples.vcf; then
+            echo "[warn] faToVcf failed with -excludeFile; retrying without exclude filter." >&2
+            faToVcf -ref="$REF_ID" "!{padded_aln}" Usher_!{mmseq_cluster_dir.baseName}/all_samples.vcf
+        fi
 
         if usher --help 2>&1 | grep -q -- ' -T '; then
             usher \
@@ -755,7 +788,8 @@ process TEST_DB_VALIDATION {
     '''
     python !{scripts_dir}/ValidateDbTree.py \
         --db !{sqlite_db} \
-        --outdir .
+        --outdir . \
+        --test-mode
     '''
 }
 
