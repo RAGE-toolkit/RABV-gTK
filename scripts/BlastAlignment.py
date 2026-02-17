@@ -25,6 +25,12 @@ class BlastAlignment:
 		self.is_update = is_update
 		self.keep_blast_tmp_dir = keep_blast_tmp_dir
 		self.db_file_name = os.path.basename(db_fasta)
+
+	@staticmethod
+	def normalize_query_id(header):
+		if header is None:
+			return ""
+		return header.strip().split()[0]
 	
 	def read_gb_matrix(self):
 		accessions = {}
@@ -239,11 +245,19 @@ class BlastAlignment:
 		seq_dicts = {}
 		query_seqs = read_file.fasta(query_fasta)  
 		for rows in query_seqs:
-			seq_dicts[rows[0].strip()] = rows[1].strip()
+			raw_header = rows[0].strip()
+			seq = rows[1].strip()
+			seq_dicts[raw_header] = seq
+			norm_header = self.normalize_query_id(raw_header)
+			if norm_header and norm_header != raw_header:
+				seq_dicts[norm_header] = seq
 
 		#Seperate plus and minus strand sequences
 		for each_line in open(query_tophit_uniq, 'r'):
 			query_acc, ref_acc, identity, strand = each_line.strip().split('\t')
+			if query_acc not in seq_dicts:
+				print(f"[warn] Missing query sequence for accession: {query_acc}")
+				continue
 			if strand == "plus":
 				with open(join(sorted_fasta, "plus.fa"), 'a') as file_plus:
 					file_plus.write(">" + query_acc + "\n" + seq_dicts[query_acc] + "\n")
@@ -396,17 +410,24 @@ class BlastAlignment:
 
 		fasta_seqs = read_file.fasta(self.query_fasta)
 		for each_seq in fasta_seqs:
-			header = each_seq[0].strip()
+			raw_header = each_seq[0].strip()
+			header = self.normalize_query_id(raw_header)
 			sequence = each_seq[1].strip()
 
+			assigned_header = None
 			if header in segment_assigned:
-				accession, reference, score, strand, segment = segment_assigned[header]
+				assigned_header = header
+			elif raw_header in segment_assigned:
+				assigned_header = raw_header
+
+			if assigned_header:
+				accession, reference, score, strand, segment = segment_assigned[assigned_header]
 				if strand == "plus":
 					with open(join(segment_sorted, f"seg_{segment}_plus.fa"), 'a') as write_file:
-							write_file.write(f">{header}\n{sequence}\n")
+						write_file.write(f">{assigned_header}\n{sequence}\n")
 				else:
 						with open(join(segment_sorted, f"seg_{segment}_minus.fa"), 'a') as write_file:
-							write_file.write(f">{header}\n{sequence}\n")
+							write_file.write(f">{assigned_header}\n{sequence}\n")
 					
 		for each_seg in os.listdir(segment_sorted):
 			name, seg_num, strand = each_seg.split('.')[0].split('_')
@@ -443,6 +464,7 @@ class BlastAlignment:
 				print(f"Error in concatenation: {e}")
 
 		segment_dictionary = self.ref_segments(join(self.base_dir, self.output_dir, "query_uniq_tophit_annotated.tsv"))
+		missing_queries = set()
 		for segment, ref_acc in segment_dictionary.items():
 
 			seq_dict = {}
@@ -457,8 +479,16 @@ class BlastAlignment:
 					continue
 				write_file = open(join(grouped_fasta, each_ref_acc + ".fa"), 'w')
 				for each_query in query_acc:
+						if each_query not in seq_dict:
+							missing_queries.add(each_query)
+							continue
 						write_file.write(">" + each_query + "\n" + seq_dict[each_query] + "\n")
 				write_file.close()
+
+		if missing_queries:
+			print(f"[warn] {len(missing_queries)} query sequences were missing after segment FASTA build; skipped while writing grouped FASTA")
+			preview = ', '.join(sorted(missing_queries)[:10])
+			print(f"[warn] Missing query accession examples: {preview}")
 
 		reference_seqs = read_file.fasta(self.db_fasta)
 	

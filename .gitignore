@@ -10,3 +10,4 @@ scripts/__*
 test_out
 flu_reference_set/
 bin/veryfasttree/*
+dev

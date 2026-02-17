@@ -6,13 +6,34 @@
 // use condaMamba for mamba if installed (check with mamba --version)
 
 scripts_dir     = "${projectDir}/scripts"
+params.max_threads =  8
+
+def parsePositiveInt = { value, paramName ->
+    try {
+        def n = (value as Integer)
+        if( n < 1 ){
+            error("ERROR: params.${paramName} must be a positive integer, got: ${value}")
+        }
+        return n
+    } catch(Exception e){
+        error("ERROR: params.${paramName} must be a positive integer, got: ${value}")
+    }
+}
+
+def MAX_THREADS = parsePositiveInt(params.max_threads, 'max_threads')
+params.max_threads = MAX_THREADS
+
+def MMSEQS_THREADS_REQUESTED = parsePositiveInt(params.mmseqs_threads ?: MAX_THREADS, 'mmseqs_threads')
+params.mmseqs_threads = Math.min(MMSEQS_THREADS_REQUESTED, MAX_THREADS)
+
+def SEGMENT_PARALLEL_THREADS = Math.max(1, (int)Math.floor(MAX_THREADS / 8))
 // 1. List your script's explicitly defined parameters (keep this in sync!)
 def scriptDefinedParams = [
     'tax_id', 'db_name', 'is_segmented', 'extra_info_fill', 'test',
     "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table", "is_flu", "gene_info",
     "xml_dir", "update", "update_file",
     "mmseqs_min_seq_id", "mmseqs_threads", "mmseqs_trim_cds_file",
-    "gisaid_dir", "previous_db", "conda_path", "test_max_cluster_seqs"
+    "gisaid_dir", "previous_db", "conda_path", "test_max_cluster_seqs", "max_threads"
     // Add all parameter names defined above
 ]
 
@@ -484,6 +505,7 @@ process TEST_SUBSAMPLE_CLUSTER_INPUT {
 
 process MMSEQS_CLUSTERING{
     publishDir "${params.publish_dir}"
+    cpus { params.is_segmented == 'Y' ? SEGMENT_PARALLEL_THREADS : MAX_THREADS }
     input:
         path padded_aln
     output:
@@ -497,12 +519,13 @@ process MMSEQS_CLUSTERING{
             -i mmseqs_input \
             -o MMseqClusters_!{padded_aln.baseName} \
             --min-seq-id !{params.mmseqs_min_seq_id} \
-            --threads !{params.mmseqs_threads}
+            --threads !{task.cpus}
     '''
 }
 
 process IQ_TREE{
     publishDir "${params.publish_dir}"
+    cpus { params.is_segmented == 'Y' ? SEGMENT_PARALLEL_THREADS : MAX_THREADS }
     input:
         path mmseq_cluster_dir
     output:
@@ -531,12 +554,13 @@ process IQ_TREE{
         fi
 
         mkdir -p IQTree_!{mmseq_cluster_dir.baseName}
-        "$IQTREE_BIN" -s "$CLUSTER_REP" -nt AUTO -m GTR -pre IQTree_!{mmseq_cluster_dir.baseName}/iqtree  -T !{params.mmseqs_threads}
+        "$IQTREE_BIN" -s "$CLUSTER_REP" -nt !{task.cpus} -m GTR -pre IQTree_!{mmseq_cluster_dir.baseName}/iqtree
     '''
 }
 
 process USHER_PLACEMENT{
     publishDir "${params.publish_dir}"
+    cpus { params.is_segmented == 'Y' ? SEGMENT_PARALLEL_THREADS : MAX_THREADS }
     input:
         tuple path(mmseq_cluster_dir), path(iqtree_dir), path(padded_aln)
     output:
@@ -560,18 +584,31 @@ process USHER_PLACEMENT{
         fi
 
         mkdir -p Usher_!{mmseq_cluster_dir.baseName}
+        export OMP_NUM_THREADS=!{task.cpus}
+        export OPENBLAS_NUM_THREADS=!{task.cpus}
+        export MKL_NUM_THREADS=!{task.cpus}
+        export NUMEXPR_NUM_THREADS=!{task.cpus}
         seqkit seq -n "$CLUSTER_REP" > Usher_!{mmseq_cluster_dir.baseName}/centroid_ids.txt
         awk -v ref="$REF_ID" '$0 != ref' Usher_!{mmseq_cluster_dir.baseName}/centroid_ids.txt > Usher_!{mmseq_cluster_dir.baseName}/exclude_ids.txt
 
         faToVcf -ref="$REF_ID" -excludeFile=Usher_!{mmseq_cluster_dir.baseName}/exclude_ids.txt \
             "!{padded_aln}" Usher_!{mmseq_cluster_dir.baseName}/all_samples.vcf
 
-        usher \
-            -v Usher_!{mmseq_cluster_dir.baseName}/all_samples.vcf \
-            -t "$TREE_FILE" \
-            -d Usher_!{mmseq_cluster_dir.baseName} \
-            -o Usher_!{mmseq_cluster_dir.baseName}/usher.pb \
-            -C -u
+        if usher --help 2>&1 | grep -q -- ' -T '; then
+            usher \
+                -v Usher_!{mmseq_cluster_dir.baseName}/all_samples.vcf \
+                -t "$TREE_FILE" \
+                -d Usher_!{mmseq_cluster_dir.baseName} \
+                -o Usher_!{mmseq_cluster_dir.baseName}/usher.pb \
+                -C -u -T !{task.cpus}
+        else
+            usher \
+                -v Usher_!{mmseq_cluster_dir.baseName}/all_samples.vcf \
+                -t "$TREE_FILE" \
+                -d Usher_!{mmseq_cluster_dir.baseName} \
+                -o Usher_!{mmseq_cluster_dir.baseName}/usher.pb \
+                -C -u
+        fi
     '''
 }
 
@@ -613,6 +650,7 @@ process SOFTWARE_VERSION {
 
 process VERY_FAST_TREE{
     publishDir "${params.publish_dir}"
+    cpus { params.is_segmented == 'Y' ? SEGMENT_PARALLEL_THREADS : MAX_THREADS }
     when: 
         params.update == null
     input:
@@ -622,7 +660,7 @@ process VERY_FAST_TREE{
     shell:
     '''
         seqkit rmdup !{padded_aln} -o !{padded_aln}_dedup.fa
-        VeryFastTree -threads 8 -nt -gtr -double-precision !{padded_aln}_dedup.fa > tree.nwk
+        VeryFastTree -threads !{task.cpus} -nt -gtr -double-precision !{padded_aln}_dedup.fa > tree.nwk
     '''
 }
 
