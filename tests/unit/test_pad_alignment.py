@@ -1,5 +1,6 @@
 import shutil
 from pathlib import Path
+import types
 
 from Bio import SeqIO
 
@@ -72,3 +73,32 @@ def test_process_master_alignment_warns_and_skips_orphan_refs(tmp_path: Path, ca
     assert "Q_OK_2" in merged_ids
     assert "Q_ORPHAN_1" not in merged_ids
     assert "Q_ORPHAN_2" not in merged_ids
+
+
+def test_process_all_masters_uses_precomputed_by_segment_then_falls_back(tmp_path: Path):
+    processor = _make_processor(tmp_path)
+
+    precomputed_dir = tmp_path / "ref_set_aligned"
+    precomputed_dir.mkdir(parents=True, exist_ok=True)
+    (precomputed_dir / "refset_1_aln.fasta").write_text(">REF_OK\nACGT\n", encoding="utf-8")
+
+    nextalign_dir = tmp_path / "Nextalign"
+    (nextalign_dir / "reference_aln" / "MASTER2").mkdir(parents=True, exist_ok=True)
+    (nextalign_dir / "reference_aln" / "MASTER2" / "MASTER2.aligned.fasta").write_text(">MASTER2\nACGT\n", encoding="utf-8")
+
+    called_refs = []
+
+    def _capture_process(self, reference_alignment_file, input_dir, base_dir, output_dir, keep_intermediate_files=False):
+        called_refs.append(Path(reference_alignment_file).name)
+
+    processor.process_master_alignment = types.MethodType(_capture_process, processor)
+
+    processor.process_all_masters(
+        master_list=["MASTER1", "MASTER2"],
+        nextalign_dir=str(nextalign_dir),
+        master_segment_map={"MASTER1": "1", "MASTER2": "2"},
+        precomputed_ref_dir=str(precomputed_dir),
+    )
+
+    assert "refset_1_aln.fasta" in called_refs
+    assert "MASTER2.aligned.fasta" in called_refs

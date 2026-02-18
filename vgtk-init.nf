@@ -32,7 +32,7 @@ def scriptDefinedParams = [
     "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table", "is_flu", "gene_info",
     "xml_dir", "update", "update_file",
     "mmseqs_min_seq_id", "mmseqs_threads", "mmseqs_trim_cds_file",
-    "gisaid_dir", "previous_db", "conda_path", "test_max_cluster_seqs", "max_threads"
+    "gisaid_dir", "previous_db", "conda_path", "test_max_cluster_seqs", "max_threads", "ref_set_aligned"
     // Add all parameter names defined above
 ]
 
@@ -439,6 +439,7 @@ process PAD_ALIGNMENT{
         path nextalign_dir 
         val master_acc_str
         path master_file_opt
+        val ref_set_aligned_dir
     output:
         path "*_merged_MSA.fasta", emit: merged_msa
     shell:
@@ -448,9 +449,15 @@ process PAD_ALIGNMENT{
              TARGET_M="!{master_file_opt}"
         fi
 
+        PRECOMP_ARGS=""
+        if [ -n "!{ref_set_aligned_dir}" ] && [ "!{ref_set_aligned_dir}" != "null" ] && [ -d "!{ref_set_aligned_dir}" ]; then
+            PRECOMP_ARGS="--precomputed_ref_dir !{ref_set_aligned_dir}"
+            echo "Using precomputed segment alignments from !{ref_set_aligned_dir}"
+        fi
+
         python !{scripts_dir}/PadAlignment.py -nd !{nextalign_dir} \
         -m "$TARGET_M" \
-        -o . -d . -i !{nextalign_dir}/query_aln --keep_intermediate_files  
+        -o . -d . -i !{nextalign_dir}/query_aln --keep_intermediate_files ${PRECOMP_ARGS}
     '''
 }
 
@@ -1305,7 +1312,8 @@ workflow {
                         ref_list_file)
     PAD_ALIGNMENT(NEXTALIGN_ALIGNMENT.out,
                   params.ref_list,
-                  ref_list_file)
+                  ref_list_file,
+                  params.ref_set_aligned)
     
     // Collect sequences that were filtered during nextalign alignment
     COLLECT_FILTERED_SEQUENCES(NEXTALIGN_ALIGNMENT.out)

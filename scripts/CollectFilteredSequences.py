@@ -6,6 +6,7 @@ Reads .errors.csv files from nextalign output and writes a summary of filtered s
 
 import os
 import csv
+import sys
 import argparse
 from pathlib import Path
 
@@ -215,7 +216,7 @@ def main():
                 "\n[ALERT] {} query sequence(s) were dropped because their BLAST-hit references "
                 "were not present in master-projected reference alignments. "
                 "See filtered_sequences_summary.txt and filtered_sequences.tsv for details.\n".format(unprojectable_count),
-                file=os.sys.stderr,
+                file=sys.stderr,
             )
         
         # Print summary

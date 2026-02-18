@@ -1,6 +1,7 @@
 import os
 import shutil
 import argparse
+import re
 import pandas as pd
 from os.path import join
 from Bio import SeqIO
@@ -34,9 +35,95 @@ class PadAlignment:
 		else:
 			return [x.strip() for x in master_acc.split(',') if x.strip()]
 
-	def process_all_masters(self, master_list, nextalign_dir):
+	def get_master_segment_map(self, master_acc):
+		master_segment = {}
+		if not os.path.isfile(master_acc):
+			return master_segment
+		try:
+			df = pd.read_csv(master_acc, sep='\t', header=None, dtype=str)
+		except Exception:
+			return master_segment
+
+		if df.shape[1] < 3:
+			return master_segment
+
+		df[0] = df[0].astype(str).str.strip()
+		df[1] = df[1].astype(str).str.strip().str.lower()
+		df[2] = df[2].astype(str).str.strip()
+
+		masters = df[df[1] == 'master']
+		for _, row in masters.iterrows():
+			master_segment[row[0]] = row[2]
+		return master_segment
+
+	@staticmethod
+	def _normalize_segment(segment_value):
+		if segment_value is None:
+			return None
+		segment_str = str(segment_value).strip()
+		if not segment_str:
+			return None
+		match = re.search(r"(\d+)", segment_str)
+		return match.group(1) if match else None
+
+	def find_precomputed_reference_alignment(self, precomputed_ref_dir, segment_value):
+		"""
+		Find a precomputed segment alignment file in precomputed_ref_dir.
+		Expected canonical naming is refset_<segment>_aln.fasta, with a
+		numeric-segment fallback for custom naming.
+		"""
+		if not precomputed_ref_dir or not os.path.isdir(precomputed_ref_dir):
+			return None
+
+		segment = self._normalize_segment(segment_value)
+		if not segment:
+			return None
+
+		preferred = os.path.join(precomputed_ref_dir, f"refset_{segment}_aln.fasta")
+		if os.path.exists(preferred):
+			return preferred
+
+		fallback_matches = []
+		for fname in os.listdir(precomputed_ref_dir):
+			if not fname.lower().endswith((".fasta", ".fa")):
+				continue
+			seg_match = re.search(r"(\d+)", fname)
+			if seg_match and seg_match.group(1) == segment:
+				fallback_matches.append(os.path.join(precomputed_ref_dir, fname))
+
+		if len(fallback_matches) == 1:
+			return fallback_matches[0]
+		if len(fallback_matches) > 1:
+			print(
+				f"[warn] Multiple precomputed alignment files matched segment {segment}: "
+				f"{', '.join(os.path.basename(x) for x in sorted(fallback_matches))}. "
+				f"Using {os.path.basename(sorted(fallback_matches)[0])}."
+			)
+			return sorted(fallback_matches)[0]
+
+		return None
+
+	def process_all_masters(self, master_list, nextalign_dir, master_segment_map=None, precomputed_ref_dir=None):
 		for master in master_list:
-			ref_aln_file = join(nextalign_dir, "reference_aln", master, f"{master}.aligned.fasta")
+			ref_aln_file = None
+			if precomputed_ref_dir and os.path.isdir(precomputed_ref_dir):
+				segment_val = (master_segment_map or {}).get(master)
+				precomputed_ref = self.find_precomputed_reference_alignment(precomputed_ref_dir, segment_val)
+				if precomputed_ref:
+					ref_aln_file = precomputed_ref
+					print(
+						f"Using precomputed segment alignment for master {master} "
+						f"(segment {segment_val}): {ref_aln_file}"
+					)
+				else:
+					print(
+						f"[warn] No precomputed segment alignment found for master {master} "
+						f"(segment {segment_val}). Falling back to nextalign reference output."
+					)
+
+			if not ref_aln_file:
+				ref_aln_file = join(nextalign_dir, "reference_aln", master, f"{master}.aligned.fasta")
+
 			if os.path.exists(ref_aln_file):
 				print(f"Processing master {master}...")
 				self.process_master_alignment(ref_aln_file, self.input_dir, self.base_dir, self.output_dir, self.keep_intermediate_files)
@@ -200,6 +287,7 @@ if __name__ == "__main__":
 	parser.add_argument("-n","--new_outputfile", action="store_true", help="New output file name for the final merged alignment.")
 	parser.add_argument("-m", "--master_acc", help="Path to ref_list file (TSV with columns: accession, type, segment) OR comma-separated master accession IDs. For segmented viruses, the script extracts all 'master' entries to process each segment separately.")
 	parser.add_argument("-nd", "--nextalign_dir", help="Path to Nextalign output directory containing reference_aln/ and query_aln/ subdirectories.")
+	parser.add_argument("--precomputed_ref_dir", default=None, help="Optional directory containing precomputed segment alignments (e.g. refset_<segment>_aln.fasta). If absent or unmatched, falls back to nextalign reference_aln outputs.")
  
 	args = parser.parse_args()
 
@@ -207,7 +295,13 @@ if __name__ == "__main__":
 
 	if args.master_acc and args.nextalign_dir:
 		masters = processor.get_master_list(args.master_acc)
-		processor.process_all_masters(masters, args.nextalign_dir)
+		master_segment_map = processor.get_master_segment_map(args.master_acc)
+		processor.process_all_masters(
+			masters,
+			args.nextalign_dir,
+			master_segment_map=master_segment_map,
+			precomputed_ref_dir=args.precomputed_ref_dir,
+		)
 	elif args.reference_alignment:
 		processor.process_master_alignment(
 			reference_alignment_file=args.reference_alignment,
