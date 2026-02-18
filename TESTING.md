@@ -53,6 +53,40 @@ The pipeline includes automated validation tests that run when `--test 1` is set
 
 ## Running Tests
 
+## Integration fixture test: H10N8 (taxid 286285)
+
+This integration flow uses a frozen XML snapshot under `test_data/h10n8_286285/GenBank-XML` so upstream NCBI updates do not make tests non-reproducible.
+
+### 1) Create or refresh fixture XML snapshot
+
+```bash
+scripts/fetch_h10n8_fixture.sh --email your_email@example.com --clean
+```
+
+### 2) Run end-to-end Nextflow integration checks
+
+```bash
+scripts/run_h10n8_xml_test.sh --email your_email@example.com
+```
+
+What this runner validates:
+- pipeline completes using profile `h10n8_xml_test`
+- SQLite DB is created and required tables are non-empty
+- `ValidateDbTree.py` passes
+- optional Robinson-Foulds regression check if `test_data/h10n8_286285/expected/iqtree.treefile` exists
+
+To enable RF regression checks, place a baseline tree at:
+
+```text
+test_data/h10n8_286285/expected/iqtree.treefile
+```
+
+Optional RF threshold override:
+
+```bash
+MAX_NORMALIZED_RF=0.20 scripts/run_h10n8_xml_test.sh --email your_email@example.com
+```
+
 ## Python Unit Tests (new)
 
 Pytest-based unit tests now exist for the first two scripts in [scripts](scripts):
@@ -79,6 +113,23 @@ Run locally:
 
 ```bash
 pytest -q tests/unit
+```
+
+Coverage is enabled by default for pytest runs via [pytest.ini](pytest.ini) and [.coveragerc](.coveragerc).
+Each run prints per-script coverage for [scripts](scripts) in the terminal and writes:
+- [coverage.xml](coverage.xml) (Cobertura XML)
+- [htmlcov/index.html](htmlcov/index.html) (interactive HTML report)
+
+Run unit tests with coverage explicitly:
+
+```bash
+pytest -q tests/unit
+```
+
+Optional: enforce minimum script coverage (example 80%):
+
+```bash
+pytest -q tests/unit --cov-fail-under=80
 ```
 
 CI execution on every push/PR:

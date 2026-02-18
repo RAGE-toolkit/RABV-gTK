@@ -122,6 +122,30 @@ class CreateSqliteDB:
 			raise ValueError(f"{label} is missing required columns: {', '.join(missing)}")
 		return df
 
+	@staticmethod
+	def _ensure_primary_accession(df: pd.DataFrame, label: str, aliases=None) -> pd.DataFrame:
+		if aliases is None:
+			aliases = []
+		if "primary_accession" in df.columns:
+			return df
+		for alias in aliases:
+			if alias in df.columns:
+				df["primary_accession"] = df[alias]
+				return df
+		raise ValueError(f"{label} is missing required columns: primary_accession")
+
+	@staticmethod
+	def _normalize_alignment_columns(df: pd.DataFrame, label: str) -> pd.DataFrame:
+		if "primary_accession" not in df.columns and "sequence_id" in df.columns:
+			df["primary_accession"] = df["sequence_id"]
+		elif "primary_accession" in df.columns and "sequence_id" not in df.columns:
+			df["sequence_id"] = df["primary_accession"]
+		else:
+			missing = [c for c in ["primary_accession", "sequence_id"] if c not in df.columns]
+			if missing:
+				raise ValueError(f"{label} is missing required columns: {', '.join(missing)}")
+		return df
+
 	def _load_filtered_details(self) -> dict:
 		"""Load filtered sequence reasons from filtered_sequences.tsv if available."""
 		reasons = {}
@@ -272,15 +296,17 @@ class CreateSqliteDB:
 
 		df_meta_data = self._add_cluster_column(df_meta_data)
 		df_features = self._read_tsv_required(join(self.features), [], "features")
-		df_aln = self._read_tsv_required(join(self.pad_aln), ["primary_accession"], "pad_aln")
+		df_aln = self._read_tsv_required(join(self.pad_aln), [], "pad_aln")
+		df_aln = self._normalize_alignment_columns(df_aln, "pad_aln")
 		df_gene = self._read_tsv_required(join(self.gene_info), [], "gene_info")
 		df_m49_country = self._read_csv_required(join(self.m49_countries), ["m49_code"], "m49_countries", dtype={'m49_code': str})
 		df_m49_interm = self._read_csv_required(join(self.m49_interm_region), [], "m49_interm_region")
 		df_m49_region = self._read_csv_required(join(self.m49_regions), [], "m49_regions")
 		df_m49_sub_region = self._read_csv_required(join(self.m49_sub_regions), [], "m49_sub_regions")
 		df_proj_setting = self._read_tsv_required(join(self.proj_settings), [], "proj_settings")
-		df_insertions = self._read_tsv_required(join(self.insertions), ["primary_accession"], "insertions")
-		df_host_taxa = self._read_tsv_required(join(self.host_taxa_file), ["primary_accession"], "host_taxa_file", dtype=str)
+		df_insertions = self._read_tsv_required(join(self.insertions), [], "insertions")
+		df_insertions = self._ensure_primary_accession(df_insertions, "insertions", aliases=["accession", "sequence_id"])
+		df_host_taxa = self._read_tsv_required(join(self.host_taxa_file), [], "host_taxa_file", dtype=str)
 		df_fasta_sequences = self.load_fasta()
 		conn = sqlite3.connect(join(output_dir, self.db_name + ".db"))
 		cursor = conn.cursor()
@@ -365,6 +391,17 @@ class CreateSqliteDB:
 				"segment": seg_num,
 				"newick": newick,
 			})
+
+		source_priority = {"usher": 0, "iqtree": 1, "veryfasttree": 2}
+		tree_records = sorted(
+			tree_records,
+			key=lambda tr: (
+				source_priority.get(tr.get("source"), 9),
+				str(tr.get("segment") or ""),
+				str(tr.get("segment_key") or ""),
+				str(tr.get("name") or ""),
+			),
+		)
 
 		seen_tree_names = set()
 		for tr in tree_records:

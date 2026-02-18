@@ -13,6 +13,7 @@ bin/veryfasttree/*
 dev
 dag*.html
 report*.html
-tests/__pycache__
-tests/unit/__pycache__
+tests/__pycache__/
+tests/unit/__pycache__/*
 */__pycache__/
+*/*/__pycache__/

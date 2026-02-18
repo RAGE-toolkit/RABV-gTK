@@ -117,7 +117,7 @@ class GenerateTables:
 		accessions = {}
 		missing_accs = []
 		seqs = {}
-		header = ["sequence_id", "alignment_name", "alignment"]
+		header = ["primary_accession", "alignment_name", "alignment"]
 		write_file = open(join(self.base_dir, self.output_dir, "sequence_alignment.tsv"), 'w')
 		write_file.write("\t".join(header) + "\n")
 		
@@ -171,7 +171,7 @@ class GenerateTables:
 
 	def create_insertion_table(self):
 		write_file = open(join(self.base_dir, self.output_dir, "insertions.tsv"), 'w')
-		header = ["accession", "reference", "insertion"]
+		header = ["primary_accession", "reference", "insertion"]
 		write_file.write("\t".join(header) + "\n")
 		for aln_dir in os.listdir(self.nextalign_dir):
 			for each_aln_dir in os.listdir(join(self.nextalign_dir, aln_dir)):
