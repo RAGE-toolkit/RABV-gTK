@@ -54,6 +54,11 @@ if( params.update_file && !params.update ){
     params.update = params.update_file
 }
 
+// Normalize optional params used as `val` process inputs
+if( params.ref_set_aligned == null ){
+    params.ref_set_aligned = 'UNSET'
+}
+
 // 4. Get all parameters provided via command line and config files
 //    The 'params' map holds the merged view of all parameters
 def providedParams = params.collect { it.key }
@@ -1060,7 +1065,7 @@ workflow {
     PAD_ALIGNMENT(NEXTALIGN_ALIGNMENT.out,
                   params.ref_list,
                   ref_list_file,
-                  params.ref_set_aligned)
+                  (params.ref_set_aligned ?: 'UNSET'))
     
     // Collect sequences that were filtered during nextalign alignment
     COLLECT_FILTERED_SEQUENCES(NEXTALIGN_ALIGNMENT.out)
