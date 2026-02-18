@@ -358,16 +358,23 @@ def main():
         if tree_name == "usher":
             if segmented_validation_ok:
                 return
-            # If cluster information is present, validate USHER tree against centroid set.
-            # This is the correct invariant for segmented/partial-tree cases where one tree
-            # may only represent a subset of all meta_data accessions.
+            # If cluster information is present, validate that centroids are represented in
+            # the USHER tree. Unlike IQ-TREE centroid trees, USHER output commonly contains
+            # additional placed non-centroid samples, so exact equality with centroid_set is
+            # not required.
             if cluster_col and len(centroid_set) > 0:
-                if missing_centroids_in_tree or extra_in_tree:
-                    raise SystemExit("Validation failed: UShER tree does not match centroid set")
-                if missing_in_tree:
+                if missing_centroids_in_tree:
+                    raise SystemExit("Validation failed: UShER tree is missing centroid nodes")
+
+                # For non-segmented runs, enforce accession consistency with meta/sequences.
+                # For segmented multi-tree runs, this is handled by per-segment validation above.
+                if missing_in_tree or missing_in_sequences or missing_in_meta:
+                    raise SystemExit("Validation failed: UShER tree does not match accessions")
+
+                if extra_in_tree:
                     print(
-                        "[warn] UShER tree is a subset of meta_data accessions "
-                        f"({len(tree_terminals)}/{len(meta_set)}); centroid consistency passed."
+                        "[info] UShER tree contains non-centroid terminals "
+                        f"({len(extra_in_tree)} extra vs centroid set); centroid coverage passed."
                     )
             else:
                 if missing_in_tree or missing_in_sequences or missing_in_meta:

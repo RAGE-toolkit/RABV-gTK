@@ -454,8 +454,13 @@ process PAD_ALIGNMENT{
              TARGET_M="!{master_file_opt}"
         fi
 
+        if [ "!{ref_set_aligned_dir}" != "UNSET" ] && [ "!{ref_set_aligned_dir}" != "null" ] && [ -n "!{ref_set_aligned_dir}" ] && [ ! -d "!{ref_set_aligned_dir}" ]; then
+            echo "[error] params.ref_set_aligned points to a non-existent directory: !{ref_set_aligned_dir}" >&2
+            exit 1
+        fi
+
         PRECOMP_ARGS=""
-        if [ -n "!{ref_set_aligned_dir}" ] && [ "!{ref_set_aligned_dir}" != "null" ] && [ -d "!{ref_set_aligned_dir}" ]; then
+        if [ -n "!{ref_set_aligned_dir}" ] && [ "!{ref_set_aligned_dir}" != "null" ] && [ "!{ref_set_aligned_dir}" != "UNSET" ] && [ -d "!{ref_set_aligned_dir}" ]; then
             PRECOMP_ARGS="--precomputed_ref_dir !{ref_set_aligned_dir}"
             echo "Using precomputed segment alignments from !{ref_set_aligned_dir}"
         fi
