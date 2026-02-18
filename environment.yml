@@ -25,6 +25,7 @@ dependencies:
   - epa-ng=0.3.8
   - gappa=0.9.0
   - pytest=9.0.2
+  - pytest-cov=7.0.0
 
   # Utilities
   - requests=2.31.0

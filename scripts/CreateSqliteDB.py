@@ -3,6 +3,7 @@ import re
 import csv
 import time
 import sqlite3
+import sys
 import read_file
 import subprocess
 import pandas as pd
@@ -68,6 +69,28 @@ class CreateSqliteDB:
 				})
 		return rows
 
+	@staticmethod
+	def _segment_from_key(segment_key):
+		if not segment_key:
+			return None
+		key = str(segment_key).strip()
+		if not key:
+			return None
+		if key.isdigit():
+			return key
+
+		patterns = [
+			r"(?:^|[_-])segment[_-]?(\d+)(?:$|[_-])",
+			r"(?:^|[_-])seg[_-]?(\d+)(?:$|[_-])",
+			r"(?:^|[_-])refset[_-]?(\d+)(?:$|[_-])",
+			r"(?:^|[_-])(\d+)(?:$|[_-])",
+		]
+		for pat in patterns:
+			m = re.search(pat, key, flags=re.IGNORECASE)
+			if m:
+				return m.group(1)
+		return None
+
 	def _load_filtered_ids(self) -> set:
 		"""Load the set of sequence IDs that were filtered during alignment."""
 		if not self.filtered_ids_file:
@@ -77,6 +100,27 @@ class CreateSqliteDB:
 				return {line.strip() for line in f if line.strip()}
 		except FileNotFoundError:
 			return set()
+
+	@staticmethod
+	def _require_file(path: str, label: str):
+		if not path or not os.path.isfile(path):
+			raise FileNotFoundError(f"{label} file not found: {path}")
+
+	@staticmethod
+	def _read_tsv_required(path: str, required_columns, label: str, dtype=None):
+		df = pd.read_csv(path, sep="\t", dtype=dtype)
+		missing = [c for c in required_columns if c not in df.columns]
+		if missing:
+			raise ValueError(f"{label} is missing required columns: {', '.join(missing)}")
+		return df
+
+	@staticmethod
+	def _read_csv_required(path: str, required_columns, label: str, dtype=None):
+		df = pd.read_csv(path, sep=",", dtype=dtype)
+		missing = [c for c in required_columns if c not in df.columns]
+		if missing:
+			raise ValueError(f"{label} is missing required columns: {', '.join(missing)}")
+		return df
 
 	def _load_filtered_details(self) -> dict:
 		"""Load filtered sequence reasons from filtered_sequences.tsv if available."""
@@ -156,6 +200,19 @@ class CreateSqliteDB:
 	def create_db(self):
 		output_dir = join(self.base_dir, self.output_dir)
 		os.makedirs(output_dir, exist_ok=True)
+
+		self._require_file(self.meta_data, "meta_data")
+		self._require_file(self.features, "features")
+		self._require_file(self.pad_aln, "pad_aln")
+		self._require_file(self.gene_info, "gene_info")
+		self._require_file(self.m49_countries, "m49_countries")
+		self._require_file(self.m49_interm_region, "m49_interm_region")
+		self._require_file(self.m49_regions, "m49_regions")
+		self._require_file(self.m49_sub_regions, "m49_sub_regions")
+		self._require_file(self.proj_settings, "proj_settings")
+		self._require_file(self.fasta_sequence_file, "fasta_sequences")
+		self._require_file(self.insertions, "insertions")
+		self._require_file(self.host_taxa_file, "host_taxa_file")
 		
 		excluded_records = []
 
@@ -167,7 +224,12 @@ class CreateSqliteDB:
 			for fid in filtered_ids:
 				excluded_records.append({"primary_accession": fid, "reason": filtered_details.get(fid, "alignment_filtering")})
 		
-		df_meta_data = pd.read_csv(join(self.meta_data), sep="\t", dtype=str)
+		df_meta_data = self._read_tsv_required(
+			join(self.meta_data),
+			["primary_accession"],
+			"meta_data",
+			dtype=str,
+		)
 
 		# Track reference/master rows so they are always retained in meta_data
 		acc_type_col = "accession_type" if "accession_type" in df_meta_data.columns else None
@@ -185,6 +247,8 @@ class CreateSqliteDB:
 			after_count = len(df_meta_data)
 			if before_count != after_count:
 				print(f"[CreateSqliteDB] Removed {before_count - after_count} filtered non-reference sequences from meta_data")
+
+		is_ref_or_master = is_ref_or_master.reindex(df_meta_data.index, fill_value=False)
 		
 		# Collect exclusions from meta_data (e.g. invalid division)
 		if "exclusion" in df_meta_data.columns:
@@ -207,16 +271,16 @@ class CreateSqliteDB:
 					print(f"[CreateSqliteDB] Retained {retained_refs} reference/master rows despite exclusion flags")
 
 		df_meta_data = self._add_cluster_column(df_meta_data)
-		df_features = pd.read_csv(join(self.features), sep="\t")
-		df_aln = pd.read_csv(join(self.pad_aln), sep="\t")
-		df_gene = pd.read_csv(join(self.gene_info), sep="\t")
-		df_m49_country = pd.read_csv(join(self.m49_countries), dtype={'m49_code': str}, sep=",")
-		df_m49_interm = pd.read_csv(join(self.m49_interm_region), sep=",")
-		df_m49_region = pd.read_csv(join(self.m49_regions), sep=",")
-		df_m49_sub_region = pd.read_csv(join(self.m49_sub_regions), sep=",")
-		df_proj_setting = pd.read_csv(join(self.proj_settings), sep="\t")
-		df_insertions = pd.read_csv(join(self.insertions), sep="\t")
-		df_host_taxa = pd.read_csv(join(self.host_taxa_file), sep="\t", dtype=str)
+		df_features = self._read_tsv_required(join(self.features), [], "features")
+		df_aln = self._read_tsv_required(join(self.pad_aln), ["primary_accession"], "pad_aln")
+		df_gene = self._read_tsv_required(join(self.gene_info), [], "gene_info")
+		df_m49_country = self._read_csv_required(join(self.m49_countries), ["m49_code"], "m49_countries", dtype={'m49_code': str})
+		df_m49_interm = self._read_csv_required(join(self.m49_interm_region), [], "m49_interm_region")
+		df_m49_region = self._read_csv_required(join(self.m49_regions), [], "m49_regions")
+		df_m49_sub_region = self._read_csv_required(join(self.m49_sub_regions), [], "m49_sub_regions")
+		df_proj_setting = self._read_tsv_required(join(self.proj_settings), [], "proj_settings")
+		df_insertions = self._read_tsv_required(join(self.insertions), ["primary_accession"], "insertions")
+		df_host_taxa = self._read_tsv_required(join(self.host_taxa_file), ["primary_accession"], "host_taxa_file", dtype=str)
 		df_fasta_sequences = self.load_fasta()
 		conn = sqlite3.connect(join(output_dir, self.db_name + ".db"))
 		cursor = conn.cursor()
@@ -291,6 +355,8 @@ class CreateSqliteDB:
 				continue
 			seg_key = entry.get("segment_key")
 			seg_num = accession_to_segment.get(seg_key) if seg_key else None
+			if seg_num is None:
+				seg_num = self._segment_from_key(seg_key)
 			name = entry.get("name") or f"{entry['source']}_{seg_key or 'tree'}"
 			tree_records.append({
 				"name": name,
@@ -379,6 +445,9 @@ if __name__ == "__main__":
 	parser.add_argument('-fd', '--filtered_details', help='TSV with filtered sequence details (seq_name, reference, error, warnings)', default=None)
 
 	args = parser.parse_args()
-
-	process(args)
+	try:
+		process(args)
+	except Exception as exc:
+		print(f"ERROR: {exc}", file=sys.stderr)
+		sys.exit(2)
 

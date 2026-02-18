@@ -17,6 +17,13 @@ def _normalize_accession(acc: str) -> str:
     return acc.strip().split()[0].split(".")[0]
 
 
+def _validate_nextalign_dir(nextalign_dir: str) -> Path:
+    path = Path(nextalign_dir)
+    if not path.exists() or not path.is_dir():
+        raise FileNotFoundError(f"Nextalign directory not found: {nextalign_dir}")
+    return path
+
+
 def collect_unprojectable_queries(nextalign_dir: str) -> dict:
     """
     Collect queries aligned to references that are not present in any reference_aln
@@ -80,7 +87,7 @@ def collect_filtered_sequences(nextalign_dir: str, output_file: str) -> dict:
         {seq_name: {"reference": ref_id, "error": error_message, "warnings": warnings}}
     """
     filtered = {}
-    nextalign_path = Path(nextalign_dir)
+    nextalign_path = _validate_nextalign_dir(nextalign_dir)
     
     # Search in both query_aln and reference_aln subdirectories
     for errors_file in nextalign_path.rglob("*.errors.csv"):
@@ -90,6 +97,11 @@ def collect_filtered_sequences(nextalign_dir: str, output_file: str) -> dict:
         try:
             with open(errors_file, "r", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
+                required_cols = {"seqName", "errors", "warnings"}
+                if not reader.fieldnames or not required_cols.issubset(set(reader.fieldnames)):
+                    raise ValueError(
+                        f"Malformed nextalign errors file {errors_file}: required columns are seqName, errors, warnings"
+                    )
                 for row in reader:
                     seq_name = row.get("seqName", "").strip()
                     errors = row.get("errors", "").strip()
@@ -103,6 +115,8 @@ def collect_filtered_sequences(nextalign_dir: str, output_file: str) -> dict:
                             "warnings": warnings,
                         }
         except Exception as e:
+            if isinstance(e, ValueError):
+                raise
             print(f"Warning: Could not read {errors_file}: {e}")
     
     # Add sequences that are silently dropped later during PadAlignment because
@@ -193,8 +207,12 @@ def main():
     
     output_path = os.path.join(args.base_dir, args.output)
     
-    print(f"Scanning {args.nextalign_dir} for filtered sequences...")
-    filtered = collect_filtered_sequences(args.nextalign_dir, output_path)
+    try:
+        print(f"Scanning {args.nextalign_dir} for filtered sequences...")
+        filtered = collect_filtered_sequences(args.nextalign_dir, output_path)
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
     
     print(f"Found {len(filtered)} filtered sequences")
     

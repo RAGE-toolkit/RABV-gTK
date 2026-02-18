@@ -64,6 +64,34 @@ def test_process_requires_either_fillup_or_bulk(tmp_path: Path):
         processor.process()
 
 
+def test_add_missing_values_requires_primary_accession_in_fillup(tmp_path: Path):
+    out_dir = tmp_path / "out"
+    bad_fillup = tmp_path / "fillup_bad.tsv"
+    bad_fillup.write_text("country\thost\nUK\tbat\n", encoding="utf-8")
+
+    processor = AddMissingData(
+        tmp_dir=str(out_dir),
+        gb_matrix=str(DATA_DIR / "input_gb_matrix.tsv"),
+        fillup_file=str(bad_fillup),
+    )
+    with pytest.raises(ValueError, match="primary_accession"):
+        processor.add_missing_values()
+
+
+def test_bulk_replace_requires_host_column_in_gb_matrix(tmp_path: Path):
+    out_dir = tmp_path / "out"
+    gb_no_host = tmp_path / "gb_no_host.tsv"
+    gb_no_host.write_text("primary_accession\tcountry\nA1\tUK\n", encoding="utf-8")
+
+    processor = AddMissingData(
+        tmp_dir=str(out_dir),
+        gb_matrix=str(gb_no_host),
+        bulk_file=str(DATA_DIR / "bulk.tsv"),
+    )
+    with pytest.raises(ValueError, match="host"):
+        processor.bulk_replace()
+
+
 def test_cli_fillup_mode(tmp_path: Path):
     out_dir = tmp_path / "cli_fillup"
     subprocess.run(

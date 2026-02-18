@@ -1,4 +1,5 @@
 from Bio import SeqIO
+import os
 
 class CalculateGenomeCoordinates:
     def __init__(self, paded_alignment, master_accession=None):
@@ -6,7 +7,12 @@ class CalculateGenomeCoordinates:
         self.master_accession = master_accession
 
     def extract_alignment_coordinates(self):
+        if not self.paded_alignment or not os.path.isfile(self.paded_alignment):
+            raise FileNotFoundError(f"Padded alignment file not found: {self.paded_alignment}")
+
         records = list(SeqIO.parse(self.paded_alignment, "fasta"))
+        if not records:
+            raise ValueError(f"No FASTA records found in alignment file: {self.paded_alignment}")
 
         # Select the master/reference sequence
         if self.master_accession:

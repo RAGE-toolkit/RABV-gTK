@@ -1,5 +1,6 @@
 import os
 import csv
+import sys
 from os.path import join
 from itertools import islice
 from argparse import ArgumentParser
@@ -13,10 +14,13 @@ class AddMissingData:
 		os.makedirs(self.tmp_dir, exist_ok=True)
 
 	def get_header(self, file):
+		if not file or not os.path.isfile(file):
+			raise FileNotFoundError(f"Input file not found: {file}")
 		with open(file) as f:
 			for header_line in islice(f, 1):
 				header = header_line.strip().split('\t')
 				return header
+		raise ValueError(f"Input file is empty or missing header: {file}")
 
 	def header_lookup(self, header):
 		header_list = []
@@ -33,9 +37,15 @@ class AddMissingData:
 	def add_missing_values(self):
 		if not self.fillup_file:
 			raise ValueError("Fillup file is not provided.")
+		if not os.path.isfile(self.gb_matrix):
+			raise FileNotFoundError(f"GenBank matrix file not found: {self.gb_matrix}")
         
 		header = self.get_header(self.fillup_file)
+		if 'primary_accession' not in header:
+			raise ValueError("Fillup file must contain 'primary_accession' column")
 		key_fields = self.header_lookup(header)
+		if len(key_fields) <= 1:
+			raise ValueError("Fillup file must include at least one of: country, host, collection_date")
 
 		if len(header) >= 2 and 'primary_accession' in header:
 			with open(self.fillup_file, mode='r') as fillup_csv:
@@ -45,6 +55,8 @@ class AddMissingData:
 			with open(self.gb_matrix, mode='r') as gB_matrix:
 				masterdata_reader = csv.DictReader(gB_matrix, delimiter='\t')
 				fieldnames = masterdata_reader.fieldnames
+				if not fieldnames or 'primary_accession' not in fieldnames:
+					raise ValueError("GenBank matrix must contain 'primary_accession' column")
 				masterdata_list = list(masterdata_reader)
 
 			for row in masterdata_list:
@@ -61,12 +73,12 @@ class AddMissingData:
 				writer.writeheader()
 				writer.writerows(masterdata_list)
 				print(f"Updated masterdata saved to {self.tmp_dir}/{output_file}")
-		else:
-			print("Bulk file format is incorrect. Ensure it contains 'primary_accession' and 'country' or 'host' or 'collection_date' columns")
 
 	def bulk_replace(self):
 		if not self.bulk_file:
 			raise ValueError("Bulk file is not provided.")
+		if not os.path.isfile(self.gb_matrix):
+			raise FileNotFoundError(f"GenBank matrix file not found: {self.gb_matrix}")
         
 		header = self.get_header(self.bulk_file)
 		if 'host' in header and 'replaced_by' in header:
@@ -77,6 +89,8 @@ class AddMissingData:
 			with open(self.gb_matrix, mode='r') as gB_matrix:
 				masterdata_reader = csv.DictReader(gB_matrix, delimiter='\t')
 				fieldnames = masterdata_reader.fieldnames
+				if not fieldnames or 'host' not in fieldnames:
+					raise ValueError("GenBank matrix must contain 'host' column for bulk replacement")
 				masterdata_list = list(masterdata_reader)
 
 			for row in masterdata_list:
@@ -91,7 +105,7 @@ class AddMissingData:
 				writer.writerows(masterdata_list)
 				print(f"Updated masterdata (bulk replace) saved to {self.tmp_dir}/{output_file}")
 		else:
-				print("Bulk file format is incorrect. Ensure it contains 'host' and 'replaced_by' columns.")
+			raise ValueError("Bulk file must contain 'host' and 'replaced_by' columns")
 
 	def process(self):
 		if self.fillup_file:
@@ -110,5 +124,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     processor = AddMissingData(tmp_dir=args.tmp_dir, gb_matrix=args.gb_matrix, fillup_file=args.fillup_file, bulk_file=args.bulk_file)
-    processor.process()
+    try:
+        processor.process()
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
 

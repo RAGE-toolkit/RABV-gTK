@@ -1,0 +1,153 @@
+import csv
+from pathlib import Path
+
+from NextalignAlignment import NextalignAlignment
+
+
+def _write_matrix(path: Path):
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f, delimiter="\t")
+        writer.writerow(["gi_number", "exclusion_status", "exclusion_criteria"])
+        writer.writerow(["ACC_OK", "0", ""])
+        writer.writerow(["ACC_FAIL", "0", ""])
+
+
+def _read_matrix(path: Path):
+    with path.open("r", newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f, delimiter="\t"))
+
+
+def test_update_gb_matrix_marks_failed_accessions(tmp_path: Path):
+    matrix = tmp_path / "gB_matrix_raw.tsv"
+    _write_matrix(matrix)
+
+    aln_dir = tmp_path / "Nextalign" / "query_aln" / "REF1"
+    aln_dir.mkdir(parents=True, exist_ok=True)
+    (aln_dir / "REF1.errors.csv").write_text(
+        "ACC_FAIL,In sequence ACC_FAIL failed due to X\n",
+        encoding="utf-8",
+    )
+
+    processor = NextalignAlignment(
+        gb_matrix=str(matrix),
+        query_dir=str(tmp_path / "query"),
+        ref_dir=str(tmp_path / "ref"),
+        ref_fa_file=str(tmp_path / "ref.fa"),
+        master_seq_dir=str(tmp_path / "master"),
+        tmp_dir=str(tmp_path),
+        master_ref="MASTER1",
+        nextalign_dir="Nextalign",
+        reference_alignment=None,
+    )
+
+    processor.update_gb_matrix([str(tmp_path / "Nextalign" / "query_aln")], str(matrix))
+
+    rows = {r["gi_number"]: r for r in _read_matrix(matrix)}
+    assert rows["ACC_FAIL"]["exclusion_status"] == "1"
+    assert "In sequence" in rows["ACC_FAIL"]["exclusion_criteria"]
+    assert rows["ACC_OK"]["exclusion_status"] == "0"
+
+
+def test_process_reference_alignment_mode_runs_query_only(tmp_path: Path, monkeypatch):
+    matrix = tmp_path / "gB_matrix_raw.tsv"
+    _write_matrix(matrix)
+
+    query_dir = tmp_path / "query"
+    ref_dir = tmp_path / "ref"
+    query_dir.mkdir(parents=True, exist_ok=True)
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    (query_dir / "REF1.fa").write_text(">Q\nATGC\n", encoding="utf-8")
+    (ref_dir / "REF1.fa").write_text(">R\nATGC\n", encoding="utf-8")
+
+    processor = NextalignAlignment(
+        gb_matrix=str(matrix),
+        query_dir=str(query_dir),
+        ref_dir=str(ref_dir),
+        ref_fa_file=str(tmp_path / "ref.fa"),
+        master_seq_dir=str(tmp_path / "master"),
+        tmp_dir=str(tmp_path),
+        master_ref="MASTER1",
+        nextalign_dir="Nextalign",
+        reference_alignment="provided_alignment.fa",
+    )
+
+    calls = {"query": 0, "master": 0, "update": 0}
+
+    def fake_query(*_args, **_kwargs):
+        calls["query"] += 1
+
+    def fake_master(*_args, **_kwargs):
+        calls["master"] += 1
+
+    def fake_update(*_args, **_kwargs):
+        calls["update"] += 1
+
+    monkeypatch.setattr(processor, "nextalign_query", fake_query)
+    monkeypatch.setattr(processor, "nextalign_master", fake_master)
+    monkeypatch.setattr(processor, "update_gb_matrix", fake_update)
+
+    processor.process()
+
+    assert calls == {"query": 1, "master": 0, "update": 1}
+
+
+def test_process_non_reference_alignment_runs_master_path(tmp_path: Path, monkeypatch):
+    matrix = tmp_path / "gB_matrix_raw.tsv"
+    _write_matrix(matrix)
+
+    query_dir = tmp_path / "query"
+    ref_dir = tmp_path / "ref"
+    master_dir = tmp_path / "master"
+    query_dir.mkdir(parents=True, exist_ok=True)
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    master_dir.mkdir(parents=True, exist_ok=True)
+
+    (query_dir / "REF1.fa").write_text(">Q\nATGC\n", encoding="utf-8")
+    (ref_dir / "REF1.fa").write_text(">R\nATGC\n", encoding="utf-8")
+    (master_dir / "MASTER1.fasta").write_text(">MASTER1\nATGC\n", encoding="utf-8")
+
+    processor = NextalignAlignment(
+        gb_matrix=str(matrix),
+        query_dir=str(query_dir),
+        ref_dir=str(ref_dir),
+        ref_fa_file=str(tmp_path / "ref.fa"),
+        master_seq_dir=str(master_dir),
+        tmp_dir=str(tmp_path),
+        master_ref="MASTER1",
+        nextalign_dir="Nextalign",
+        reference_alignment=None,
+    )
+
+    calls = {"query": 0, "master": 0, "update": 0, "dedup": 0}
+
+    def fake_query(*_args, **_kwargs):
+        calls["query"] += 1
+
+    def fake_master(query_acc_path, ref_acc_path, query_aln_op):
+        calls["master"] += 1
+        master = Path(ref_acc_path).stem
+        out_dir = Path(query_aln_op) / master
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / f"{master}.aligned.fasta").write_text(">MASTER1\nATGC\n", encoding="utf-8")
+
+    class _FakeRemoveRedundantSequence:
+        def __init__(self, _input_seq, _output_seq):
+            pass
+
+        def remove_redundant_fasta(self):
+            calls["dedup"] += 1
+
+    def fake_update(*_args, **_kwargs):
+        calls["update"] += 1
+
+    monkeypatch.setattr(processor, "nextalign_query", fake_query)
+    monkeypatch.setattr(processor, "nextalign_master", fake_master)
+    monkeypatch.setattr(processor, "update_gb_matrix", fake_update)
+    monkeypatch.setattr("NextalignAlignment.RemoveRedundantSequence", _FakeRemoveRedundantSequence)
+
+    processor.process()
+
+    assert calls["query"] == 1
+    assert calls["master"] == 1
+    assert calls["dedup"] == 1
+    assert calls["update"] == 1

@@ -5,7 +5,31 @@ import csv
 import os
 import sqlite3
 import sys
-from typing import Callable, List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
+
+
+class ValidationError(ValueError):
+    pass
+
+
+def ensure_file_exists(path: str, label: str) -> None:
+    if not path:
+        raise ValidationError(f"Missing required file path for {label}")
+    if not os.path.exists(path):
+        raise ValidationError(f"{label} does not exist: {path}")
+    if not os.path.isfile(path):
+        raise ValidationError(f"{label} is not a file: {path}")
+
+
+def ensure_readable_tsv(path: str, label: str) -> None:
+    ensure_file_exists(path, label)
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            handle.readline()
+    except UnicodeDecodeError as e:
+        raise ValidationError(f"{label} is not valid UTF-8 TSV text: {path}. {e}") from e
+    except OSError as e:
+        raise ValidationError(f"Could not read {label}: {path}. {e}") from e
 
 
 def count_columns_tsv(path: str) -> int:
@@ -36,12 +60,57 @@ def scalar(cur: sqlite3.Cursor, sql: str) -> int:
     return row[0] if row else 0
 
 
+def _table_columns(cur: sqlite3.Cursor, table_name: str) -> set:
+    cur.execute(f"PRAGMA table_info({table_name})")
+    return {row[1] for row in cur.fetchall()}
+
+
+def validate_db_schema(cur: sqlite3.Cursor, segmented: bool) -> None:
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    tables = {row[0] for row in cur.fetchall()}
+
+    required_tables = {"meta_data", "sequence_alignment", "excluded_accessions"}
+    missing_tables = sorted(required_tables - tables)
+    if missing_tables:
+        raise ValidationError(
+            "SQLite DB is missing required table(s): {}".format(
+                ", ".join(missing_tables)
+            )
+        )
+
+    required_columns = {
+        "meta_data": {"primary_accession"},
+        "sequence_alignment": {"sequence_id", "alignment_name"},
+        "excluded_accessions": {"primary_accession", "reason"},
+    }
+    if segmented:
+        required_columns["meta_data"].add("segment")
+
+    missing_column_messages = []
+    for table_name, cols in required_columns.items():
+        present = _table_columns(cur, table_name)
+        missing = sorted(cols - present)
+        if missing:
+            missing_column_messages.append(f"{table_name}: {', '.join(missing)}")
+
+    if missing_column_messages:
+        raise ValidationError(
+            "SQLite DB is missing required column(s): " + "; ".join(missing_column_messages)
+        )
+
+
 def db_checks(db_path: str, segmented: bool) -> Tuple[List[str], List[str]]:
     lines: List[str] = []
     errors: List[str] = []
 
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
+    ensure_file_exists(db_path, "sqlite_db")
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        validate_db_schema(cur, segmented)
+    except sqlite3.Error as e:
+        raise ValidationError(f"Could not open/parse sqlite_db {db_path}: {e}") from e
 
     alignment_rows = scalar(cur, "SELECT COUNT(*) FROM sequence_alignment")
     distinct_seq_ids = scalar(cur, "SELECT COUNT(DISTINCT sequence_id) FROM sequence_alignment")
@@ -152,6 +221,19 @@ def db_checks(db_path: str, segmented: bool) -> Tuple[List[str], List[str]]:
 
     conn.close()
     return lines, errors
+
+
+def validate_mode_inputs(args) -> None:
+    ensure_file_exists(args.sqlite_db, "sqlite_db")
+
+    if args.mode == "segmented":
+        ensure_readable_tsv(args.annotated_blast, "annotated_blast")
+        ensure_readable_tsv(args.validated_matrix, "validated_matrix")
+        if args.pivoted_matrix:
+            ensure_readable_tsv(args.pivoted_matrix, "pivoted_matrix")
+    else:
+        ensure_readable_tsv(args.blast_hits, "blast_hits")
+        ensure_readable_tsv(args.gb_matrix, "gb_matrix")
 
 
 def run_segmented(args) -> Tuple[List[str], bool]:
@@ -309,18 +391,27 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    if args.mode == "segmented":
-        err = require_args(args, ["annotated_blast", "validated_matrix"])
-        if err:
-            print(err, file=sys.stderr)
-            return 2
-        lines, ok = run_segmented(args)
-    else:
-        err = require_args(args, ["blast_hits", "gb_matrix"])
-        if err:
-            print(err, file=sys.stderr)
-            return 2
-        lines, ok = run_non_segmented(args)
+    try:
+        if args.mode == "segmented":
+            err = require_args(args, ["annotated_blast", "validated_matrix"])
+            if err:
+                print(err, file=sys.stderr)
+                return 2
+            validate_mode_inputs(args)
+            lines, ok = run_segmented(args)
+        else:
+            err = require_args(args, ["blast_hits", "gb_matrix"])
+            if err:
+                print(err, file=sys.stderr)
+                return 2
+            validate_mode_inputs(args)
+            lines, ok = run_non_segmented(args)
+    except ValidationError as e:
+        print(f"Input validation error: {e}", file=sys.stderr)
+        return 2
+    except sqlite3.Error as e:
+        print(f"SQLite processing error: {e}", file=sys.stderr)
+        return 2
 
     write_output(lines, args.output)
     print("\n".join(lines))

@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from CalcAlignmentCord import CalculateAlignmentCoordinates
 
 
@@ -101,3 +103,35 @@ def test_cli_generates_expected_features(tmp_path: Path):
     actual = read_tsv_as_dicts(tmp_path / "Tables" / "features.tsv")
     expected = read_tsv_as_dicts(DATA_DIR / "expected_features.tsv")
     assert actual == expected
+
+
+def test_find_gaps_in_fasta_raises_when_alignment_dir_missing(tmp_path: Path):
+    processor = CalculateAlignmentCoordinates(
+        paded_alignment=str(tmp_path / "missing_dir"),
+        master_gff=[str(DATA_DIR / "MASTER1.gff3")],
+        tmp_dir=str(tmp_path),
+        output_dir="Tables",
+        output_file="features.tsv",
+        master_accession=str(DATA_DIR / "master_list.tsv"),
+        blast_uniq_hits=str(DATA_DIR / "query_uniq_tophits.tsv"),
+    )
+    with pytest.raises(FileNotFoundError, match="Padded alignment directory not found"):
+        processor.find_gaps_in_fasta()
+
+
+def test_load_blast_hits_raises_on_malformed_row(tmp_path: Path):
+    bad_hits = tmp_path / "bad_hits.tsv"
+    bad_hits.write_text("Q_A\tREF_A\t99.9\n", encoding="utf-8")
+
+    processor = CalculateAlignmentCoordinates(
+        paded_alignment=str(DATA_DIR / "padded_alignment"),
+        master_gff=[str(DATA_DIR / "MASTER1.gff3")],
+        tmp_dir=str(tmp_path),
+        output_dir="Tables",
+        output_file="features.tsv",
+        master_accession=str(DATA_DIR / "master_list.tsv"),
+        blast_uniq_hits=str(bad_hits),
+    )
+
+    with pytest.raises(ValueError, match="Malformed BLAST hits row"):
+        processor.load_blast_hits()

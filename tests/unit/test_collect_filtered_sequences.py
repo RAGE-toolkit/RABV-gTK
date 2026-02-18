@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from CollectFilteredSequences import (
     collect_filtered_sequences,
     write_filtered_ids_only,
@@ -139,3 +141,18 @@ def test_collect_filtered_sequences_marks_unprojectable_queries(tmp_path: Path):
     assert filtered["Q_ORPHAN"]["reference"] == "REF_ORPHAN"
     assert "cannot be projected" in filtered["Q_ORPHAN"]["error"]
     assert "Q_OK" not in filtered
+
+
+def test_collect_filtered_sequences_raises_when_nextalign_dir_missing(tmp_path: Path):
+    with pytest.raises(FileNotFoundError, match="Nextalign directory not found"):
+        collect_filtered_sequences(str(tmp_path / "missing"), str(tmp_path / "out.tsv"))
+
+
+def test_collect_filtered_sequences_raises_on_malformed_errors_csv(tmp_path: Path):
+    nextalign_dir = tmp_path / "Nextalign"
+    bad_csv = nextalign_dir / "query_aln" / "REF_A" / "bad.errors.csv"
+    bad_csv.parent.mkdir(parents=True, exist_ok=True)
+    bad_csv.write_text("seq\terr\nQ1\toops\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Malformed nextalign errors file"):
+        collect_filtered_sequences(str(nextalign_dir), str(tmp_path / "out.tsv"))

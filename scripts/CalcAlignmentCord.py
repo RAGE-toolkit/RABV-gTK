@@ -1,4 +1,5 @@
 import os
+import sys
 import pandas as pd
 from Bio import SeqIO
 from os.path import join
@@ -113,9 +114,14 @@ class CalculateAlignmentCoordinates:
 		return results
 
 	def load_blast_hits(self):
+		if not self.blast_uniq_hits or not os.path.isfile(self.blast_uniq_hits):
+			raise FileNotFoundError(f"BLAST unique hits file not found: {self.blast_uniq_hits}")
 		acc_dict = {}
 		for i in open(self.blast_uniq_hits):
-			query, ref, score, strand = i.strip().split('\t')
+			parts = i.strip().split('\t')
+			if len(parts) != 4:
+				raise ValueError(f"Malformed BLAST hits row in {self.blast_uniq_hits}: {i.strip()}")
+			query, ref, score, strand = parts
 			acc_dict[query] = ref
 		return acc_dict
 
@@ -123,8 +129,16 @@ class CalculateAlignmentCoordinates:
 		os.makedirs(join(self.tmp_dir, self.output_dir), exist_ok=True)
 
 		fasta_file_dir = self.paded_alignment
+		if not fasta_file_dir or not os.path.isdir(fasta_file_dir):
+			raise FileNotFoundError(f"Padded alignment directory not found: {fasta_file_dir}")
+		fasta_files = [f for f in os.listdir(fasta_file_dir) if os.path.isfile(join(fasta_file_dir, f))]
+		if not fasta_files:
+			raise ValueError(f"No alignment files found in directory: {fasta_file_dir}")
+
 		blast_dict = self.load_blast_hits()
 		masters = self.get_master_list()
+		if not masters:
+			raise ValueError("No master accession could be resolved from --master_accession")
 
 		header = ["accession", "master_ref_accession", "reference_accession", "aln_start", "aln_end", "cds_start", "cds_end", "product"]
 		with open(join(self.tmp_dir, self.output_dir, self.output_file), "w") as out_f:
@@ -132,7 +146,7 @@ class CalculateAlignmentCoordinates:
 			out_f.write("\t".join(header))
 			out_f.write("\n")
 
-			for fasta_file in os.listdir(fasta_file_dir):
+			for fasta_file in fasta_files:
 				
 				current_master = None
 				for m in masters:
@@ -202,7 +216,11 @@ if __name__ == "__main__":
 	args = parser.parse_args()
 
 	processor = CalculateAlignmentCoordinates(args.paded_alignment, args.master_gff, args.tmp_dir, args.output_dir, args.output_file, args.master_accession, args.blast_uniq_hits)
-	processor.find_gaps_in_fasta()
+	try:
+		processor.find_gaps_in_fasta()
+	except Exception as exc:
+		print(f"ERROR: {exc}", file=sys.stderr)
+		sys.exit(2)
 
 # Example usage:
 #find_gaps_in_fasta("NC_001542.aligned_merged_MSA.fasta", "NC_001542.gff3")

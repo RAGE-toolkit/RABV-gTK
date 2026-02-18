@@ -2,6 +2,7 @@
 
 import os
 import csv
+import sys
 import shutil
 import subprocess
 import numpy as np
@@ -31,8 +32,24 @@ class BlastAlignment:
 		if header is None:
 			return ""
 		return header.strip().split()[0]
+
+	@staticmethod
+	def _require_file(path, label):
+		if not path or not os.path.isfile(path):
+			raise FileNotFoundError(f"{label} file not found: {path}")
+
+	@staticmethod
+	def _validate_tsv_columns(path, required_columns, label):
+		with open(path, newline='', encoding='utf-8') as handle:
+			reader = csv.DictReader(handle, delimiter='\t')
+			fieldnames = reader.fieldnames or []
+		missing = [c for c in required_columns if c not in fieldnames]
+		if missing:
+			raise ValueError(f"{label} is missing required columns: {', '.join(missing)}")
 	
 	def read_gb_matrix(self):
+		self._require_file(self.gb_matrix, "GenBank matrix")
+		self._validate_tsv_columns(self.gb_matrix, ["gi_number", "sequence"], "GenBank matrix")
 		accessions = {}
 		with open(self.gb_matrix, newline='', encoding='utf-8') as file:
 			reader = csv.DictReader(file, delimiter='\t') 
@@ -501,12 +518,20 @@ class BlastAlignment:
 			write_file.close()
 
 	def update_gB_matrix(self, query_fasta, query_tophit_uniq, gB_matrix_file):
+		self._require_file(query_fasta, "query fasta")
+		self._require_file(query_tophit_uniq, "unique BLAST hits")
+		self._require_file(gB_matrix_file, "GenBank matrix")
+		self._validate_tsv_columns(gB_matrix_file, ["gi_number"], "GenBank matrix")
+
 		exclusion_refs = self.get_exclusion_list_refs()
 
 		uniq_blast_acc = {}
 		with open(query_tophit_uniq) as f:
 			for line in f:
-				query_acc, ref_acc, score, strand = line.strip().split("\t")
+				parts = line.strip().split("\t")
+				if len(parts) != 4:
+					raise ValueError(f"Malformed unique BLAST hit row in {query_tophit_uniq}: {line.strip()}")
+				query_acc, ref_acc, score, strand = parts
 				uniq_blast_acc[query_acc] = ref_acc
 
 		# Also read the raw blast hits to identify which queries hit exclusion refs
@@ -608,7 +633,17 @@ class BlastAlignment:
 
 	def process(self):
 		print(f'Using {self.gb_matrix} GenBank matrix file')
-		self.check_blast_exists("blastn")
+		self._require_file(self.query_fasta, "Query FASTA")
+		self._require_file(self.db_fasta, "Reference FASTA")
+		self._require_file(self.gb_matrix, "GenBank matrix")
+		self._validate_tsv_columns(self.gb_matrix, ["gi_number"], "GenBank matrix")
+		if self.is_segmented_virus == 'Y':
+			self._require_file(self.segment_file, "Segment annotation")
+		if os.path.isfile(self.master_acc):
+			self._require_file(self.master_acc, "Master accession list")
+
+		if not self.check_blast_exists("blastn"):
+			raise RuntimeError("blastn executable not available")
 		if self.is_segmented_virus == 'Y' and not self.segment_file:
 			raise ValueError("Missing segment file with accession and segment information")
 
@@ -674,4 +709,8 @@ if __name__ == "__main__":
 		args.gb_matrix,
 		args.segment_file
 		)
-	processor.process()
+	try:
+		processor.process()
+	except Exception as exc:
+		print(f"ERROR: {exc}", file=sys.stderr)
+		sys.exit(2)

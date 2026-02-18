@@ -183,3 +183,173 @@ def test_create_sqlite_db_uses_filtered_details_reason(tmp_path: Path):
             "alignment_filtering: reference not present in master-projected reference_aln; query cannot be projected into merged segment alignment",
         )
     ]
+
+
+def test_create_sqlite_db_maps_tree_manifest_segment_from_refset_key(tmp_path: Path):
+    meta = tmp_path / "meta.tsv"
+    features = tmp_path / "features.tsv"
+    aln = tmp_path / "sequence_alignment.tsv"
+    gene = tmp_path / "gene.tsv"
+    m49_country = tmp_path / "m49_country.csv"
+    m49_inter = tmp_path / "m49_inter.csv"
+    m49_region = tmp_path / "m49_region.csv"
+    m49_sub = tmp_path / "m49_sub.csv"
+    proj = tmp_path / "software.tsv"
+    insertions = tmp_path / "insertions.tsv"
+    host_taxa = tmp_path / "host.tsv"
+    fasta = tmp_path / "seqs.fa"
+    tree_manifest = tmp_path / "tree_manifest.tsv"
+    seg_tree = tmp_path / "seg1.treefile"
+
+    write_tsv(meta, [["A", "", "1"]], ["primary_accession", "exclusion", "segment"])
+    write_tsv(features, [["A", "P"]], ["primary_accession", "feature"])
+    write_tsv(aln, [["A", "ATGC"]], ["primary_accession", "aligned_seq"])
+    write_tsv(gene, [["geneA", "Gene A"]], ["name", "description"])
+    write_csv(m49_country, [["001", "World"]], ["m49_code", "name"])
+    write_csv(m49_inter, [["X", "Inter"]], ["code", "name"])
+    write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
+    write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
+    write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
+    write_tsv(insertions, [["A", "none"]], ["primary_accession", "insertions"])
+    write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
+    fasta.write_text(">A\nATGC\n", encoding="utf-8")
+
+    seg_tree.write_text("(A:0.1);\n", encoding="utf-8")
+    write_tsv(
+        tree_manifest,
+        [["usher", "usher_refset_1", "refset_1_aln_merged_MSA", str(seg_tree)]],
+        ["source", "name", "segment_key", "path"],
+    )
+
+    db = CreateSqliteDB(
+        meta_data=str(meta),
+        features=str(features),
+        pad_aln=str(aln),
+        gene_info=str(gene),
+        m49_countries=str(m49_country),
+        m49_interm_region=str(m49_inter),
+        m49_regions=str(m49_region),
+        m49_sub_regions=str(m49_sub),
+        proj_settings=str(proj),
+        fasta_sequence_file=str(fasta),
+        insertions=str(insertions),
+        host_taxa_file=str(host_taxa),
+        base_dir=str(tmp_path),
+        output_dir="SqliteDB",
+        db_name="testdb_manifest_segment",
+        db_status="new db",
+        tree_manifest=str(tree_manifest),
+    )
+    db.create_db()
+
+    conn = sqlite3.connect(tmp_path / "SqliteDB" / "testdb_manifest_segment.db")
+    cur = conn.cursor()
+    cur.execute("SELECT source, segment_key, segment FROM trees WHERE source='usher' LIMIT 1")
+    row = cur.fetchone()
+    conn.close()
+
+    assert row == ("usher", "refset_1_aln_merged_MSA", "1")
+
+
+def test_create_sqlite_db_raises_when_meta_file_missing(tmp_path: Path):
+    features = tmp_path / "features.tsv"
+    aln = tmp_path / "sequence_alignment.tsv"
+    gene = tmp_path / "gene.tsv"
+    m49_country = tmp_path / "m49_country.csv"
+    m49_inter = tmp_path / "m49_inter.csv"
+    m49_region = tmp_path / "m49_region.csv"
+    m49_sub = tmp_path / "m49_sub.csv"
+    proj = tmp_path / "software.tsv"
+    insertions = tmp_path / "insertions.tsv"
+    host_taxa = tmp_path / "host.tsv"
+    fasta = tmp_path / "seqs.fa"
+
+    write_tsv(features, [["A", "P"]], ["primary_accession", "feature"])
+    write_tsv(aln, [["A", "ATGC"]], ["primary_accession", "aligned_seq"])
+    write_tsv(gene, [["geneA", "Gene A"]], ["name", "description"])
+    write_csv(m49_country, [["001", "World"]], ["m49_code", "name"])
+    write_csv(m49_inter, [["X", "Inter"]], ["code", "name"])
+    write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
+    write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
+    write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
+    write_tsv(insertions, [["A", "none"]], ["primary_accession", "insertions"])
+    write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
+    fasta.write_text(">A\nATGC\n", encoding="utf-8")
+
+    db = CreateSqliteDB(
+        meta_data=str(tmp_path / "missing_meta.tsv"),
+        features=str(features),
+        pad_aln=str(aln),
+        gene_info=str(gene),
+        m49_countries=str(m49_country),
+        m49_interm_region=str(m49_inter),
+        m49_regions=str(m49_region),
+        m49_sub_regions=str(m49_sub),
+        proj_settings=str(proj),
+        fasta_sequence_file=str(fasta),
+        insertions=str(insertions),
+        host_taxa_file=str(host_taxa),
+        base_dir=str(tmp_path),
+        output_dir="SqliteDB",
+        db_name="bad",
+        db_status="new db",
+    )
+
+    try:
+        db.create_db()
+        assert False, "Expected FileNotFoundError"
+    except FileNotFoundError as exc:
+        assert "meta_data file not found" in str(exc)
+
+
+def test_create_sqlite_db_raises_when_alignment_missing_primary_accession(tmp_path: Path):
+    meta = tmp_path / "meta.tsv"
+    features = tmp_path / "features.tsv"
+    aln = tmp_path / "sequence_alignment.tsv"
+    gene = tmp_path / "gene.tsv"
+    m49_country = tmp_path / "m49_country.csv"
+    m49_inter = tmp_path / "m49_inter.csv"
+    m49_region = tmp_path / "m49_region.csv"
+    m49_sub = tmp_path / "m49_sub.csv"
+    proj = tmp_path / "software.tsv"
+    insertions = tmp_path / "insertions.tsv"
+    host_taxa = tmp_path / "host.tsv"
+    fasta = tmp_path / "seqs.fa"
+
+    write_tsv(meta, [["A", ""]], ["primary_accession", "exclusion"])
+    write_tsv(features, [["A", "P"]], ["primary_accession", "feature"])
+    write_tsv(aln, [["ATGC"]], ["aligned_seq"])
+    write_tsv(gene, [["geneA", "Gene A"]], ["name", "description"])
+    write_csv(m49_country, [["001", "World"]], ["m49_code", "name"])
+    write_csv(m49_inter, [["X", "Inter"]], ["code", "name"])
+    write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
+    write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
+    write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
+    write_tsv(insertions, [["A", "none"]], ["primary_accession", "insertions"])
+    write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
+    fasta.write_text(">A\nATGC\n", encoding="utf-8")
+
+    db = CreateSqliteDB(
+        meta_data=str(meta),
+        features=str(features),
+        pad_aln=str(aln),
+        gene_info=str(gene),
+        m49_countries=str(m49_country),
+        m49_interm_region=str(m49_inter),
+        m49_regions=str(m49_region),
+        m49_sub_regions=str(m49_sub),
+        proj_settings=str(proj),
+        fasta_sequence_file=str(fasta),
+        insertions=str(insertions),
+        host_taxa_file=str(host_taxa),
+        base_dir=str(tmp_path),
+        output_dir="SqliteDB",
+        db_name="bad2",
+        db_status="new db",
+    )
+
+    try:
+        db.create_db()
+        assert False, "Expected ValueError"
+    except ValueError as exc:
+        assert "pad_aln is missing required columns" in str(exc)

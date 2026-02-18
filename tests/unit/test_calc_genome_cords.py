@@ -36,3 +36,20 @@ def test_extract_alignment_coordinates_raises_when_master_missing():
     )
     with pytest.raises(ValueError, match="Master sequence with ID"):
         calc.extract_alignment_coordinates()
+
+
+def test_extract_alignment_coordinates_raises_when_file_missing(tmp_path: Path):
+    calc = CalculateGenomeCoordinates(
+        paded_alignment=str(tmp_path / "missing.fa"),
+        master_accession="MASTER1",
+    )
+    with pytest.raises(FileNotFoundError, match="Padded alignment file not found"):
+        calc.extract_alignment_coordinates()
+
+
+def test_extract_alignment_coordinates_raises_when_alignment_empty(tmp_path: Path):
+    empty = tmp_path / "empty.fa"
+    empty.write_text("", encoding="utf-8")
+    calc = CalculateGenomeCoordinates(paded_alignment=str(empty), master_accession="MASTER1")
+    with pytest.raises(ValueError, match="No FASTA records found"):
+        calc.extract_alignment_coordinates()

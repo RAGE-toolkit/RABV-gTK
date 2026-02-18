@@ -1,6 +1,8 @@
 import csv
 from pathlib import Path
 
+import pytest
+
 from BlastAlignment import BlastAlignment
 
 
@@ -129,3 +131,30 @@ def test_process_non_segmented_orchestration_without_external_tools(tmp_path: Pa
     filtered_fa = out_dir / "ref_seq_filtered.fa"
     assert filtered_fa.exists()
     assert "REF_EXCL" not in filtered_fa.read_text(encoding="utf-8")
+
+
+def test_update_gb_matrix_raises_on_malformed_unique_hits_row(tmp_path: Path):
+    gb_copy = tmp_path / "gb_matrix.tsv"
+    gb_copy.write_text((DATA_DIR / "gb_matrix.tsv").read_text(encoding="utf-8"), encoding="utf-8")
+
+    out_dir = tmp_path / "blast"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bad_uniq = out_dir / "query_uniq_tophits.tsv"
+    bad_uniq.write_text("Q1\tREF_MASTER\t99.9\n", encoding="utf-8")
+
+    processor = make_processor(tmp_path, gb_copy)
+    with pytest.raises(ValueError, match="Malformed unique BLAST hit row"):
+        processor.update_gB_matrix(
+            query_fasta=str(DATA_DIR / "query.fa"),
+            query_tophit_uniq=str(bad_uniq),
+            gB_matrix_file=str(gb_copy),
+        )
+
+
+def test_process_raises_when_gb_matrix_missing_gi_number(tmp_path: Path):
+    gb_bad = tmp_path / "gb_bad.tsv"
+    gb_bad.write_text("primary_accession\tsequence\nQ1\tATGC\n", encoding="utf-8")
+
+    processor = make_processor(tmp_path, gb_bad)
+    with pytest.raises(ValueError, match="missing required columns: gi_number"):
+        processor.process()
