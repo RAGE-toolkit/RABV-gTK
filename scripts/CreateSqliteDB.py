@@ -13,7 +13,7 @@ from argparse import ArgumentParser
 from collections import defaultdict
 
 class CreateSqliteDB:
-	def __init__(self, meta_data, features, pad_aln, gene_info, m49_countries, m49_interm_region, m49_regions, m49_sub_regions, proj_settings, fasta_sequence_file, insertions, host_taxa_file, base_dir, output_dir, db_name, db_status, tree_file=None, iqtree_file=None, usher_tree=None, cluster_tsv=None, cluster_min_seq_id=None, filtered_ids_file=None):
+	def __init__(self, meta_data, features, pad_aln, gene_info, m49_countries, m49_interm_region, m49_regions, m49_sub_regions, proj_settings, fasta_sequence_file, insertions, host_taxa_file, base_dir, output_dir, db_name, db_status, tree_file=None, iqtree_file=None, usher_tree=None, cluster_tsv=None, cluster_min_seq_id=None, filtered_ids_file=None, filtered_details_file=None, tree_manifest=None):
 		self.meta_data = meta_data
 		self.features = features
 		self.pad_aln = pad_aln
@@ -36,9 +36,11 @@ class CreateSqliteDB:
 		self.cluster_tsv = cluster_tsv
 		self.cluster_min_seq_id = cluster_min_seq_id
 		self.filtered_ids_file = filtered_ids_file
+		self.filtered_details_file = filtered_details_file
+		self.tree_manifest = tree_manifest
 
 	@staticmethod
-	def _read_tree_file(tree_path: str):
+	def _read_tree_file(tree_path):
 		if not tree_path:
 			return None
 		try:
@@ -46,6 +48,25 @@ class CreateSqliteDB:
 				return handle.read().strip()
 		except FileNotFoundError:
 			return None
+
+	@staticmethod
+	def _load_tree_manifest(manifest_path):
+		if not manifest_path or not os.path.isfile(manifest_path):
+			return []
+		rows = []
+		with open(manifest_path, "r", encoding="utf-8") as f:
+			reader = csv.DictReader(f, delimiter='\t')
+			for row in reader:
+				path_val = (row.get("path") or "").strip()
+				if not path_val:
+					continue
+				rows.append({
+					"source": (row.get("source") or "").strip() or "unknown",
+					"name": (row.get("name") or "").strip() or None,
+					"segment_key": (row.get("segment_key") or "").strip() or None,
+					"path": path_val,
+				})
+		return rows
 
 	def _load_filtered_ids(self) -> set:
 		"""Load the set of sequence IDs that were filtered during alignment."""
@@ -57,7 +78,35 @@ class CreateSqliteDB:
 		except FileNotFoundError:
 			return set()
 
-	def _add_cluster_column(self, df_meta_data: pd.DataFrame):
+	def _load_filtered_details(self) -> dict:
+		"""Load filtered sequence reasons from filtered_sequences.tsv if available."""
+		reasons = {}
+		if not self.filtered_details_file or not os.path.isfile(self.filtered_details_file):
+			return reasons
+		try:
+			df = pd.read_csv(self.filtered_details_file, sep="\t", dtype=str).fillna("")
+		except Exception:
+			return reasons
+
+		if "seq_name" not in df.columns:
+			return reasons
+
+		for _, row in df.iterrows():
+			seq = str(row.get("seq_name", "")).strip()
+			if not seq:
+				continue
+			err = str(row.get("error", "")).strip()
+			ref = str(row.get("reference", "")).strip()
+			if err:
+				reason = f"alignment_filtering: {err}"
+			elif ref:
+				reason = f"alignment_filtering: filtered against reference {ref}"
+			else:
+				reason = "alignment_filtering"
+			reasons[seq] = reason
+		return reasons
+
+	def _add_cluster_column(self, df_meta_data):
 		if not self.cluster_tsv:
 			return df_meta_data
 		try:
@@ -112,10 +161,11 @@ class CreateSqliteDB:
 
 		# Load filtered sequence IDs to exclude
 		filtered_ids = self._load_filtered_ids()
+		filtered_details = self._load_filtered_details()
 		if filtered_ids:
 			print(f"[CreateSqliteDB] Excluding {len(filtered_ids)} filtered sequences from DB")
 			for fid in filtered_ids:
-				excluded_records.append({"primary_accession": fid, "reason": "alignment_filtering"})
+				excluded_records.append({"primary_accession": fid, "reason": filtered_details.get(fid, "alignment_filtering")})
 		
 		df_meta_data = pd.read_csv(join(self.meta_data), sep="\t", dtype=str)
 
@@ -208,8 +258,18 @@ class CreateSqliteDB:
 		cursor.execute("""CREATE TABLE IF NOT EXISTS host_taxa AS SELECT * FROM host_taxa;""")
 		cursor.execute("""CREATE TABLE IF NOT EXISTS excluded_accessions AS SELECT * FROM excluded_accessions;""")
 
-		cursor.execute("""CREATE TABLE IF NOT EXISTS trees (name TEXT, source TEXT, newick TEXT, created_at TEXT);""")
+		cursor.execute("""CREATE TABLE IF NOT EXISTS trees (name TEXT, source TEXT, segment_key TEXT, segment TEXT, newick TEXT, created_at TEXT);""")
 		now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+		accession_to_segment = {}
+		if "primary_accession" in df_meta_data.columns and "segment" in df_meta_data.columns:
+			for _, row in df_meta_data[["primary_accession", "segment"]].dropna().iterrows():
+				acc = str(row["primary_accession"]).strip()
+				seg = str(row["segment"]).strip()
+				if acc and seg and acc not in accession_to_segment:
+					accession_to_segment[acc] = seg
+
+		tree_records = []
 		for name, source, tree_path in [
 			("veryfasttree", "veryfasttree", self.tree_file),
 			("iqtree", "iqtree", self.iqtree_file),
@@ -217,10 +277,39 @@ class CreateSqliteDB:
 		]:
 			newick = self._read_tree_file(tree_path)
 			if newick:
-				cursor.execute(
-					"INSERT INTO trees (name, source, newick, created_at) VALUES (?, ?, ?, ?)",
-					(name, source, newick, now_str),
-				)
+				tree_records.append({
+					"name": name,
+					"source": source,
+					"segment_key": None,
+					"segment": None,
+					"newick": newick,
+				})
+
+		for entry in self._load_tree_manifest(self.tree_manifest):
+			newick = self._read_tree_file(entry["path"])
+			if not newick:
+				continue
+			seg_key = entry.get("segment_key")
+			seg_num = accession_to_segment.get(seg_key) if seg_key else None
+			name = entry.get("name") or f"{entry['source']}_{seg_key or 'tree'}"
+			tree_records.append({
+				"name": name,
+				"source": entry["source"],
+				"segment_key": seg_key,
+				"segment": seg_num,
+				"newick": newick,
+			})
+
+		seen_tree_names = set()
+		for tr in tree_records:
+			key = (tr["source"], tr["name"])
+			if key in seen_tree_names:
+				continue
+			seen_tree_names.add(key)
+			cursor.execute(
+				"INSERT INTO trees (name, source, segment_key, segment, newick, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+				(tr["name"], tr["source"], tr["segment_key"], tr["segment"], tr["newick"], now_str),
+			)
 
 		cursor.execute("""CREATE TABLE IF NOT EXISTS info (creation_type TEXT,date TEXT);""")
 		creation_type = self._normalize_db_status(self.db_status)
@@ -255,6 +344,8 @@ def process(args):
 			args.cluster_tsv,
 			args.cluster_min_seq_id,
 			args.filtered_ids,
+			args.filtered_details,
+			args.tree_manifest,
 		)
 	db_creator.create_db()
 
@@ -281,9 +372,11 @@ if __name__ == "__main__":
 	parser.add_argument('-t', '--tree_file', help='VeryFastTree Newick file', default=None)
 	parser.add_argument('-it', '--iqtree_file', help='IQ-TREE Newick file', default=None)
 	parser.add_argument('-ut', '--usher_tree', help='UShER output Newick file', default=None)
+	parser.add_argument('--tree_manifest', help='TSV manifest with columns: source, name, segment_key, path', default=None)
 	parser.add_argument('-ct', '--cluster_tsv', help='MMseqs clustering TSV (rep\tmember)', default=None)
 	parser.add_argument('-ci', '--cluster_min_seq_id', help='MMseqs min sequence identity used for clustering', default=None)
 	parser.add_argument('-fi', '--filtered_ids', help='File with filtered sequence IDs (one per line) to exclude from DB', default=None)
+	parser.add_argument('-fd', '--filtered_details', help='TSV with filtered sequence details (seq_name, reference, error, warnings)', default=None)
 
 	args = parser.parse_args()
 

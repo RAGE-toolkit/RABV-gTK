@@ -48,7 +48,7 @@ def find_cluster_column(columns):
 def fetch_tree_newick(conn):
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT name, newick FROM trees WHERE newick IS NOT NULL AND length(newick) > 0 ORDER BY CASE WHEN name='usher' THEN 0 WHEN name='iqtree' THEN 1 ELSE 2 END, name LIMIT 1"
+        "SELECT name, newick FROM trees WHERE newick IS NOT NULL AND length(newick) > 0 ORDER BY CASE WHEN source='usher' THEN 0 WHEN source='iqtree' THEN 1 ELSE 2 END, name LIMIT 1"
     )
     row = cursor.fetchone()
     if not row:
@@ -56,10 +56,44 @@ def fetch_tree_newick(conn):
     return row[0], row[1]
 
 
+def fetch_trees(conn, source=None):
+    cols = get_table_columns(conn, "trees")
+    select_cols = ["name", "source", "newick"]
+    if "segment_key" in cols:
+        select_cols.append("segment_key")
+    if "segment" in cols:
+        select_cols.append("segment")
+
+    cursor = conn.cursor()
+    query = f"SELECT {', '.join(select_cols)} FROM trees WHERE newick IS NOT NULL AND length(newick) > 0"
+    params = []
+    if source:
+        query += " AND source = ?"
+        params.append(source)
+    cursor.execute(query, params)
+
+    rows = []
+    for record in cursor.fetchall():
+        row = {k: v for k, v in zip(select_cols, record)}
+        row.setdefault("segment_key", None)
+        row.setdefault("segment", None)
+        rows.append(row)
+    return rows
+
+
 def fetch_table_column(conn, table_name, column_name):
     cursor = conn.cursor()
     cursor.execute(f"SELECT {column_name} FROM {table_name}")
     return [r[0] for r in cursor.fetchall()]
+
+
+def table_exists(conn, table_name):
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (table_name,),
+    )
+    return cursor.fetchone() is not None
 
 
 def main():
@@ -70,6 +104,11 @@ def main():
         "--test-mode",
         action="store_true",
         help="Relax strict failures for known test-only edge cases (e.g., no placeable queries)",
+    )
+    parser.add_argument(
+        "--expect-segment-trees",
+        action="store_true",
+        help="In segmented test mode, require at least one USHER tree per segment in meta_data",
     )
     args = parser.parse_args()
 
@@ -112,6 +151,84 @@ def main():
         meta_count = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM sequences")
         seq_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM trees WHERE source='usher'")
+        usher_tree_count = cursor.fetchone()[0]
+
+        segment_count = None
+        meta_columns_for_seg = get_table_columns(conn, "meta_data")
+        if "segment" in meta_columns_for_seg:
+            segment_values = [
+                x for x in fetch_table_column(conn, "meta_data", "segment")
+                if x is not None and str(x).strip() != ""
+            ]
+            segment_count = len(set(segment_values))
+
+        segmented_validation_ok = False
+        if args.expect_segment_trees and segment_count is not None and segment_count > 1:
+            usher_trees = fetch_trees(conn, source="usher")
+
+            excluded_accessions = set()
+            if table_exists(conn, "excluded_accessions"):
+                excluded_accessions = set(
+                    x for x in fetch_table_column(conn, "excluded_accessions", "primary_accession") if x
+                )
+
+            cursor.execute("SELECT primary_accession, segment FROM meta_data")
+            meta_rows = cursor.fetchall()
+
+            accession_to_segment = {}
+            accessions_by_segment = {}
+            segments_in_meta = set()
+            for acc, seg in meta_rows:
+                if acc:
+                    accession_to_segment[str(acc)] = str(seg).strip() if seg is not None else None
+                if seg is None:
+                    continue
+                seg_str = str(seg).strip()
+                if not seg_str:
+                    continue
+                segments_in_meta.add(seg_str)
+                if acc and str(acc) not in excluded_accessions:
+                    accessions_by_segment.setdefault(seg_str, set()).add(str(acc))
+
+            trees_by_segment = {}
+            for tr in usher_trees:
+                seg = tr.get("segment")
+                seg_key = tr.get("segment_key")
+                if (seg is None or str(seg).strip() == "") and seg_key:
+                    seg = accession_to_segment.get(str(seg_key))
+                if seg is None or str(seg).strip() == "":
+                    continue
+                seg_str = str(seg).strip()
+                t = Phylo.read(StringIO(tr["newick"]), "newick")
+                terms = {x.name for x in t.get_terminals() if x.name}
+                trees_by_segment.setdefault(seg_str, set()).update(terms)
+
+            missing_segment_trees = sorted(s for s in segments_in_meta if s not in trees_by_segment)
+            per_segment_missing = {}
+            for seg in sorted(segments_in_meta):
+                expected_accessions = accessions_by_segment.get(seg, set())
+                tree_terms = trees_by_segment.get(seg, set())
+                m = sorted(expected_accessions - tree_terms)
+                if m:
+                    per_segment_missing[seg] = m
+
+            print(f"[info] Segmented validation: meta segments={len(segments_in_meta)} tree segments={len(trees_by_segment)}")
+            if missing_segment_trees:
+                print(f"[info] Missing tree segments: {', '.join(missing_segment_trees[:10])}")
+            if per_segment_missing:
+                first_seg = sorted(per_segment_missing.keys())[0]
+                print(f"[info] Segment {first_seg} missing accessions in tree (first 10): {', '.join(per_segment_missing[first_seg][:10])}")
+
+            if missing_segment_trees:
+                raise SystemExit(
+                    "Validation failed: segmented run expects at least one UShER tree per segment "
+                    f"(missing segments={', '.join(missing_segment_trees[:10])})"
+                )
+            if per_segment_missing:
+                raise SystemExit("Validation failed: per-segment UShER tree is missing unfiltered accessions")
+
+            segmented_validation_ok = True
 
         report_path = os.path.join(args.outdir, "db_tree_validation.txt")
         missing_tree_path = os.path.join(args.outdir, "missing_in_tree.txt")
@@ -125,6 +242,9 @@ def main():
             report.write(f"Meta rows: {meta_count}\n")
             report.write(f"Sequence rows: {seq_count}\n")
             report.write(f"Tree terminals: {len(tree_terminals)}\n")
+            report.write(f"UShER tree rows: {usher_tree_count}\n")
+            if segment_count is not None:
+                report.write(f"Segment count in meta_data: {segment_count}\n")
             if cluster_col:
                 report.write(f"Cluster column: {cluster_col}\n")
                 report.write(f"Centroid count: {len(centroid_set)}\n")
@@ -186,6 +306,9 @@ def main():
         # Print summary to stdout for quick visibility in logs
         print(f"[info] Tree source: {tree_name}")
         print(f"[info] Meta rows: {meta_count}, Sequence rows: {seq_count}, Tree terminals: {len(tree_terminals)}")
+        print(f"[info] UShER tree rows: {usher_tree_count}")
+        if segment_count is not None:
+            print(f"[info] Segment count in meta_data: {segment_count}")
         if cluster_col:
             print(f"[info] Cluster column: {cluster_col}, Centroid count: {len(centroid_set)}")
             print(f"[info] Missing centroids in tree: {len(missing_centroids_in_tree)}")
@@ -224,10 +347,31 @@ def main():
             )
             return
 
+        if args.expect_segment_trees and segment_count is not None and segment_count > 1 and not segmented_validation_ok:
+            if usher_tree_count < segment_count:
+                raise SystemExit(
+                    "Validation failed: segmented run expects at least one UShER tree per segment "
+                    f"(segments={segment_count}, usher_trees={usher_tree_count})"
+                )
+
         # Fail if any validation issues detected
         if tree_name == "usher":
-            if missing_in_tree or missing_in_sequences or missing_in_meta:
-                raise SystemExit("Validation failed: UShER tree does not match accessions")
+            if segmented_validation_ok:
+                return
+            # If cluster information is present, validate USHER tree against centroid set.
+            # This is the correct invariant for segmented/partial-tree cases where one tree
+            # may only represent a subset of all meta_data accessions.
+            if cluster_col and len(centroid_set) > 0:
+                if missing_centroids_in_tree or extra_in_tree:
+                    raise SystemExit("Validation failed: UShER tree does not match centroid set")
+                if missing_in_tree:
+                    print(
+                        "[warn] UShER tree is a subset of meta_data accessions "
+                        f"({len(tree_terminals)}/{len(meta_set)}); centroid consistency passed."
+                    )
+            else:
+                if missing_in_tree or missing_in_sequences or missing_in_meta:
+                    raise SystemExit("Validation failed: UShER tree does not match accessions")
         elif cluster_col:
             if missing_centroids_in_tree or extra_in_tree:
                 raise SystemExit("Validation failed: IQ-TREE does not match centroid set")

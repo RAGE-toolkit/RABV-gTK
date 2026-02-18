@@ -104,3 +104,38 @@ def test_collect_filtered_sequences_with_fixture_dataset(tmp_path: Path):
 
     assert out_tsv.read_text(encoding="utf-8") == (DATA_DIR / "expected_filtered.tsv").read_text(encoding="utf-8")
     assert Path(out_ids).read_text(encoding="utf-8") == (DATA_DIR / "expected_ids.txt").read_text(encoding="utf-8")
+
+
+def test_collect_filtered_sequences_marks_unprojectable_queries(tmp_path: Path):
+    nextalign_dir = tmp_path / "Nextalign"
+
+    # reference_aln contains only REF_OK as projectable into master coordinates
+    ref_dir = nextalign_dir / "reference_aln" / "MASTER1"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    (ref_dir / "MASTER1.aligned.fasta").write_text(
+        ">MASTER1\nATGC\n>REF_OK\nATGC\n",
+        encoding="utf-8",
+    )
+
+    # query_aln for REF_OK should remain unflagged
+    q_ok_dir = nextalign_dir / "query_aln" / "REF_OK"
+    q_ok_dir.mkdir(parents=True, exist_ok=True)
+    (q_ok_dir / "REF_OK.aligned.fasta").write_text(
+        ">REF_OK\nATGC\n>Q_OK\nATGC\n",
+        encoding="utf-8",
+    )
+
+    # query_aln for REF_ORPHAN cannot be projected because REF_ORPHAN absent in reference_aln
+    q_orphan_dir = nextalign_dir / "query_aln" / "REF_ORPHAN"
+    q_orphan_dir.mkdir(parents=True, exist_ok=True)
+    (q_orphan_dir / "REF_ORPHAN.aligned.fasta").write_text(
+        ">REF_ORPHAN\nATGC\n>Q_ORPHAN\nATGC\n",
+        encoding="utf-8",
+    )
+
+    filtered = collect_filtered_sequences(str(nextalign_dir), str(tmp_path / "filtered.tsv"))
+
+    assert "Q_ORPHAN" in filtered
+    assert filtered["Q_ORPHAN"]["reference"] == "REF_ORPHAN"
+    assert "cannot be projected" in filtered["Q_ORPHAN"]["error"]
+    assert "Q_OK" not in filtered

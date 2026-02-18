@@ -62,6 +62,43 @@ class PadAlignment:
 			updated_sequences.append(seq_record)
 		return updated_sequences
 
+	@staticmethod
+	def _read_fasta_headers(fasta_path):
+		headers = []
+		if not os.path.exists(fasta_path):
+			return headers
+		for record in SeqIO.parse(fasta_path, "fasta"):
+			headers.append(record.id.split('.')[0])
+		return headers
+
+	def find_orphan_query_references(self, reference_alignment_file, input_dir):
+		"""
+		Find query_aln reference directories that cannot be projected because their
+		reference is absent from the master-projected reference alignment file.
+
+		Returns a dict:
+			{ref_id: [query_accession_1, query_accession_2, ...]}
+		"""
+		master_alignment = SeqIO.to_dict(SeqIO.parse(reference_alignment_file, "fasta"))
+		projectable_refs = {ref_id.split('.')[0] for ref_id in master_alignment.keys()}
+
+		orphans = {}
+		if not os.path.isdir(input_dir):
+			return orphans
+
+		for ref_id in os.listdir(input_dir):
+			ref_path = os.path.join(input_dir, ref_id)
+			if not os.path.isdir(ref_path):
+				continue
+			if ref_id in projectable_refs:
+				continue
+			aln_file = os.path.join(ref_path, f"{ref_id}.aligned.fasta")
+			query_ids = [q for q in self._read_fasta_headers(aln_file) if q != ref_id]
+			if query_ids:
+				orphans[ref_id] = query_ids
+
+		return orphans
+
 	def process_master_alignment(self, reference_alignment_file, input_dir, base_dir, output_dir, keep_intermediate_files=False):
 		master_alignment = SeqIO.to_dict(SeqIO.parse(reference_alignment_file, "fasta"))
 		merged_sequences = []
@@ -104,6 +141,16 @@ class PadAlignment:
 				print(f"Saved merged alignment to {merged_output_file}")
 		else:
 			print(f"No sequences found for {reference_alignment_file}, skipping merged file creation.")
+
+		orphan_refs = self.find_orphan_query_references(reference_alignment_file, input_dir)
+		if orphan_refs:
+			orphan_query_count = sum(len(v) for v in orphan_refs.values())
+			preview_refs = ', '.join(sorted(orphan_refs.keys())[:10])
+			print(
+				f"[warn] {len(orphan_refs)} query_aln reference(s) are not present in master-projected alignment "
+				f"and were skipped ({orphan_query_count} query sequence(s))."
+			)
+			print(f"[warn] Skipped reference examples: {preview_refs}")
 
 		if not keep_intermediate_files:
 			for ref_id in master_alignment:

@@ -111,3 +111,75 @@ def test_create_sqlite_db_exclusions_clusters_and_trees(tmp_path: Path):
     assert creation_type == "last updated"
 
     conn.close()
+
+
+def test_create_sqlite_db_uses_filtered_details_reason(tmp_path: Path):
+    meta = tmp_path / "meta.tsv"
+    features = tmp_path / "features.tsv"
+    aln = tmp_path / "sequence_alignment.tsv"
+    gene = tmp_path / "gene.tsv"
+    m49_country = tmp_path / "m49_country.csv"
+    m49_inter = tmp_path / "m49_inter.csv"
+    m49_region = tmp_path / "m49_region.csv"
+    m49_sub = tmp_path / "m49_sub.csv"
+    proj = tmp_path / "software.tsv"
+    insertions = tmp_path / "insertions.tsv"
+    host_taxa = tmp_path / "host.tsv"
+    fasta = tmp_path / "seqs.fa"
+    filtered_ids = tmp_path / "filtered_ids.txt"
+    filtered_details = tmp_path / "filtered_sequences.tsv"
+
+    write_tsv(meta, [["A", ""], ["B", ""]], ["primary_accession", "exclusion"])
+    write_tsv(features, [["A", "P"]], ["primary_accession", "feature"])
+    write_tsv(aln, [["A", "ATGC"]], ["primary_accession", "aligned_seq"])
+    write_tsv(gene, [["geneA", "Gene A"]], ["name", "description"])
+    write_csv(m49_country, [["001", "World"]], ["m49_code", "name"])
+    write_csv(m49_inter, [["X", "Inter"]], ["code", "name"])
+    write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
+    write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
+    write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
+    write_tsv(insertions, [["A", "none"]], ["primary_accession", "insertions"])
+    write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
+    fasta.write_text(">A\nATGC\n>B\nATGA\n", encoding="utf-8")
+
+    filtered_ids.write_text("B\n", encoding="utf-8")
+    write_tsv(
+        filtered_details,
+        [["B", "EU747327", "reference not present in master-projected reference_aln; query cannot be projected into merged segment alignment", ""]],
+        ["seq_name", "reference", "error", "warnings"],
+    )
+
+    db = CreateSqliteDB(
+        meta_data=str(meta),
+        features=str(features),
+        pad_aln=str(aln),
+        gene_info=str(gene),
+        m49_countries=str(m49_country),
+        m49_interm_region=str(m49_inter),
+        m49_regions=str(m49_region),
+        m49_sub_regions=str(m49_sub),
+        proj_settings=str(proj),
+        fasta_sequence_file=str(fasta),
+        insertions=str(insertions),
+        host_taxa_file=str(host_taxa),
+        base_dir=str(tmp_path),
+        output_dir="SqliteDB",
+        db_name="testdb2",
+        db_status="new db",
+        filtered_ids_file=str(filtered_ids),
+        filtered_details_file=str(filtered_details),
+    )
+    db.create_db()
+
+    conn = sqlite3.connect(tmp_path / "SqliteDB" / "testdb2.db")
+    cur = conn.cursor()
+    cur.execute("SELECT primary_accession, reason FROM excluded_accessions ORDER BY primary_accession")
+    rows = cur.fetchall()
+    conn.close()
+
+    assert rows == [
+        (
+            "B",
+            "alignment_filtering: reference not present in master-projected reference_aln; query cannot be projected into merged segment alignment",
+        )
+    ]

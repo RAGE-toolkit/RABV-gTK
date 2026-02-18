@@ -461,6 +461,7 @@ process COLLECT_FILTERED_SEQUENCES {
     output:
         path "filtered_sequences.tsv", emit: filtered_tsv
         path "filtered_sequences_ids.txt", emit: filtered_ids
+        path "filtered_sequences_summary.txt", emit: filtered_summary
     shell:
     '''
     python !{scripts_dir}/CollectFilteredSequences.py \
@@ -730,23 +731,53 @@ process CREATE_SQLITE_DB {
         path iqtree_dirs          // Can be multiple directories for segmented viruses
         path mmseq_cluster_dirs   // Can be multiple directories for segmented viruses
         path usher_dirs           // Can be multiple directories for segmented viruses
+        path filtered_tsv
         path filtered_ids
     output:
         path "${params.db_name}.db"
     shell:
     '''
-    # For segmented viruses, there may be multiple directories - search across all of them
+    # For segmented viruses, there may be multiple directories - collect all trees with segment keys
     IQTREE_FILE=$(find -L . -name "*.treefile" -print -quit || true)
     CLUSTER_TSV=$(find -L . -name "*_clusters.tsv" -print -quit || true)
     USHER_FILE=$(find -L . -name "final-tree.nh" -print -quit || true)
     if [ -z "$USHER_FILE" ]; then
         USHER_FILE=$(find -L . -name "uncondensed-final-tree.nh" -print -quit || true)
     fi
-    echo "Using IQ-TREE file: $IQTREE_FILE ; MMseqs cluster TSV: $CLUSTER_TSV ; USHER file: $USHER_FILE"
+
+    TREE_MANIFEST="tree_manifest.tsv"
+    printf "source\tname\tsegment_key\tpath\n" > "$TREE_MANIFEST"
+
+    for d in IQTree_MMseqClusters_*; do
+        [ -d "$d" ] || continue
+        tf=$(find -L "$d" -name "*.treefile" -print -quit || true)
+        [ -n "$tf" ] || continue
+        seg_key=$(basename "$d" | sed -E 's/^IQTree_MMseqClusters_//' | sed -E 's/_dedup.*$//' | cut -d'.' -f1)
+        printf "iqtree\tiqtree_%s\t%s\t%s\n" "$seg_key" "$seg_key" "$tf" >> "$TREE_MANIFEST"
+    done
+
+    for d in Usher_MMseqClusters_*; do
+        [ -d "$d" ] || continue
+        tf=$(find -L "$d" -name "final-tree.nh" -print -quit || true)
+        if [ -z "$tf" ]; then
+            tf=$(find -L "$d" -name "uncondensed-final-tree.nh" -print -quit || true)
+        fi
+        [ -n "$tf" ] || continue
+        seg_key=$(basename "$d" | sed -E 's/^Usher_MMseqClusters_//' | sed -E 's/_dedup.*$//' | cut -d'.' -f1)
+        printf "usher\tusher_%s\t%s\t%s\n" "$seg_key" "$seg_key" "$tf" >> "$TREE_MANIFEST"
+    done
+
+    TREE_MANIFEST_ARG=""
+    if [ "$(wc -l < "$TREE_MANIFEST")" -gt 1 ]; then
+        TREE_MANIFEST_ARG="--tree_manifest $TREE_MANIFEST"
+    fi
+
+    echo "Using IQ-TREE file: $IQTREE_FILE ; MMseqs cluster TSV: $CLUSTER_TSV ; USHER file: $USHER_FILE ; tree manifest rows: $(($(wc -l < "$TREE_MANIFEST")-1))"
     IQTREE_ARG=""
     CLUSTER_ARG=""
     USHER_ARG=""
     FILTERED_ARG=""
+    FILTERED_DETAILS_ARG=""
     if [ -n "$IQTREE_FILE" ] && [ -f "$IQTREE_FILE" ]; then
         IQTREE_ARG="-it $IQTREE_FILE"
     fi
@@ -760,6 +791,9 @@ process CREATE_SQLITE_DB {
         FILTERED_ARG="-fi !{filtered_ids}"
         echo "Excluding $(wc -l < !{filtered_ids}) filtered sequences from DB"
     fi
+    if [ -f "!{filtered_tsv}" ]; then
+        FILTERED_DETAILS_ARG="-fd !{filtered_tsv}"
+    fi
 
     python !{scripts_dir}/CreateSqliteDB.py -m !{meta_data} \
     -rf !{features} -p !{sequence_alignment} \
@@ -770,7 +804,7 @@ process CREATE_SQLITE_DB {
     -mir !{projectDir}/assets/m49_intermediate_region.csv \
     -mr !{projectDir}/assets/m49_region.csv \
     -msr !{projectDir}/assets/m49_sub_region.csv \
-    -d !{params.db_name} -b . -o . ${IQTREE_ARG} ${USHER_ARG} ${CLUSTER_ARG} ${FILTERED_ARG}
+    -d !{params.db_name} -b . -o . ${IQTREE_ARG} ${USHER_ARG} ${CLUSTER_ARG} ${FILTERED_ARG} ${FILTERED_DETAILS_ARG} ${TREE_MANIFEST_ARG}
     # need to make gene info come from gff file rather than hardcoded rabv one
     '''
 }
@@ -786,10 +820,16 @@ process TEST_DB_VALIDATION {
         path "db_tree.png"
     shell:
     '''
+    EXTRA_ARGS=""
+    if [ "!{params.is_segmented}" = "Y" ]; then
+        EXTRA_ARGS="--expect-segment-trees"
+    fi
+
     python !{scripts_dir}/ValidateDbTree.py \
         --db !{sqlite_db} \
         --outdir . \
-        --test-mode
+        --test-mode \
+        ${EXTRA_ARGS}
     '''
 }
 
@@ -853,6 +893,7 @@ process TEST_SEGMENTED_OUTPUT{
         path annotated_blast
         path validated_matrix
         path pivoted_matrix
+        path sqlite_db
     output:
         path "test_segmented_results.txt"
     shell:
@@ -926,6 +967,91 @@ process TEST_SEGMENTED_OUTPUT{
         echo "Test 3: SKIPPED - Pivoted matrix not expected for this run" >> test_segmented_results.txt
     fi
     echo "" >> test_segmented_results.txt
+
+    # Test 4: Validate DB sequence_alignment coverage and segment-consistent alignments
+    echo "Test 4: Checking sequence_alignment table in SQLite DB..." >> test_segmented_results.txt
+    python - <<'PY'
+import sqlite3
+import sys
+
+db_path = "!{sqlite_db}"
+
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+
+def scalar(sql):
+    cur.execute(sql)
+    row = cur.fetchone()
+    return row[0] if row else 0
+
+alignment_rows = scalar("SELECT COUNT(*) FROM sequence_alignment")
+distinct_seq_ids = scalar("SELECT COUNT(DISTINCT sequence_id) FROM sequence_alignment")
+meta_rows = scalar("SELECT COUNT(*) FROM meta_data")
+
+missing_from_alignment = scalar(
+    """
+    SELECT COUNT(*) FROM meta_data m
+    WHERE m.primary_accession IS NOT NULL
+      AND TRIM(m.primary_accession) <> ''
+      AND NOT EXISTS (
+          SELECT 1 FROM sequence_alignment s
+          WHERE s.sequence_id = m.primary_accession
+      )
+    """
+)
+
+segment_mismatch = scalar(
+    """
+    SELECT COUNT(*)
+    FROM sequence_alignment s
+    JOIN meta_data q ON q.primary_accession = s.sequence_id
+    JOIN meta_data r ON r.primary_accession = s.alignment_name
+    WHERE COALESCE(TRIM(q.segment), '') <> ''
+      AND COALESCE(TRIM(r.segment), '') <> ''
+      AND TRIM(q.segment) <> TRIM(r.segment)
+    """
+)
+
+missing_alignment_ref_meta = scalar(
+    """
+    SELECT COUNT(*)
+    FROM sequence_alignment s
+    LEFT JOIN meta_data r ON r.primary_accession = s.alignment_name
+    WHERE s.alignment_name IS NOT NULL
+      AND TRIM(s.alignment_name) <> ''
+      AND r.primary_accession IS NULL
+    """
+)
+
+print(f"  - sequence_alignment rows: {alignment_rows}")
+print(f"  - unique aligned sequence_id values: {distinct_seq_ids}")
+print(f"  - meta_data rows: {meta_rows}")
+print(f"  - meta_data accessions missing from sequence_alignment: {missing_from_alignment}")
+print(f"  - alignment_name values missing in meta_data: {missing_alignment_ref_meta}")
+print(f"  - segment mismatches (query vs alignment_name): {segment_mismatch}")
+
+errors = []
+if alignment_rows == 0:
+    errors.append("sequence_alignment is empty")
+if missing_from_alignment != 0:
+    errors.append(f"{missing_from_alignment} meta_data sequences missing alignment")
+if missing_alignment_ref_meta != 0:
+    errors.append(f"{missing_alignment_ref_meta} alignment_name entries not present in meta_data")
+if segment_mismatch != 0:
+    errors.append(f"{segment_mismatch} sequence_alignment rows map across different segments")
+
+conn.close()
+
+if errors:
+    print("✗ FAIL: " + "; ".join(errors))
+    sys.exit(1)
+
+print("✓ PASS: sequence_alignment has full metadata coverage and segment-consistent mapping")
+PY
+    if [ $? -ne 0 ]; then
+        exit 1
+    fi
+    echo "" >> test_segmented_results.txt
     
     echo "=== All segmented virus tests completed ===" >> test_segmented_results.txt
     cat test_segmented_results.txt
@@ -939,6 +1065,7 @@ process TEST_NON_SEGMENTED_OUTPUT{
     input:
         path blast_hits
         path gb_matrix
+        path sqlite_db
     output:
         path "test_non_segmented_results.txt"
     shell:
@@ -981,6 +1108,76 @@ process TEST_NON_SEGMENTED_OUTPUT{
         echo "✓ PASS: Pipeline processed sequences" >> test_non_segmented_results.txt
     else
         echo "⚠ WARNING: No sequences processed" >> test_non_segmented_results.txt
+    fi
+    echo "" >> test_non_segmented_results.txt
+
+    # Test 4: Validate DB sequence_alignment coverage for all metadata sequences
+    echo "Test 4: Checking sequence_alignment table in SQLite DB..." >> test_non_segmented_results.txt
+    python - <<'PY'
+import sqlite3
+import sys
+
+db_path = "!{sqlite_db}"
+
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+
+def scalar(sql):
+    cur.execute(sql)
+    row = cur.fetchone()
+    return row[0] if row else 0
+
+alignment_rows = scalar("SELECT COUNT(*) FROM sequence_alignment")
+distinct_seq_ids = scalar("SELECT COUNT(DISTINCT sequence_id) FROM sequence_alignment")
+meta_rows = scalar("SELECT COUNT(*) FROM meta_data")
+
+missing_from_alignment = scalar(
+    """
+    SELECT COUNT(*) FROM meta_data m
+    WHERE m.primary_accession IS NOT NULL
+      AND TRIM(m.primary_accession) <> ''
+      AND NOT EXISTS (
+          SELECT 1 FROM sequence_alignment s
+          WHERE s.sequence_id = m.primary_accession
+      )
+    """
+)
+
+missing_alignment_ref_meta = scalar(
+    """
+    SELECT COUNT(*)
+    FROM sequence_alignment s
+    LEFT JOIN meta_data r ON r.primary_accession = s.alignment_name
+    WHERE s.alignment_name IS NOT NULL
+      AND TRIM(s.alignment_name) <> ''
+      AND r.primary_accession IS NULL
+    """
+)
+
+print(f"  - sequence_alignment rows: {alignment_rows}")
+print(f"  - unique aligned sequence_id values: {distinct_seq_ids}")
+print(f"  - meta_data rows: {meta_rows}")
+print(f"  - meta_data accessions missing from sequence_alignment: {missing_from_alignment}")
+print(f"  - alignment_name values missing in meta_data: {missing_alignment_ref_meta}")
+
+errors = []
+if alignment_rows == 0:
+    errors.append("sequence_alignment is empty")
+if missing_from_alignment != 0:
+    errors.append(f"{missing_from_alignment} meta_data sequences missing alignment")
+if missing_alignment_ref_meta != 0:
+    errors.append(f"{missing_alignment_ref_meta} alignment_name entries not present in meta_data")
+
+conn.close()
+
+if errors:
+    print("✗ FAIL: " + "; ".join(errors))
+    sys.exit(1)
+
+print("✓ PASS: sequence_alignment covers all meta_data sequences")
+PY
+    if [ $? -ne 0 ]; then
+        exit 1
     fi
     echo "" >> test_non_segmented_results.txt
     
@@ -1095,23 +1292,6 @@ workflow {
             data = VALIDATE_STRAIN.out.validated_matrix
 
             PIVOT_TABLE_SEGMENTS(data)
-            
-            // Run tests for segmented viruses
-            if (params.test == "1") {
-                TEST_SEGMENTED_OUTPUT(
-                    BLAST_ALIGNMENT.out.query_uniq_tophit_annotated,
-                    VALIDATE_SEGMENT.out.validated_matrix,
-                    PIVOT_TABLE_SEGMENTS.out.pivoted_matrix
-                )
-            }
-        }
-    } else {
-        // Run tests for non-segmented viruses
-        if (params.test == "1") {
-            TEST_NON_SEGMENTED_OUTPUT(
-                BLAST_ALIGNMENT.out.query_uniq_tophits,
-                data
-            )
         }
     }
 
@@ -1215,8 +1395,26 @@ workflow {
                      iqtree_collected,
                      mmseq_collected,
                      usher_collected,
+                     COLLECT_FILTERED_SEQUENCES.out.filtered_tsv,
                      COLLECT_FILTERED_SEQUENCES.out.filtered_ids
                      )
+
+    if (params.test == "1") {
+        if (params.is_segmented == "Y" && params.is_flu == "Y") {
+            TEST_SEGMENTED_OUTPUT(
+                BLAST_ALIGNMENT.out.query_uniq_tophit_annotated,
+                VALIDATE_SEGMENT.out.validated_matrix,
+                PIVOT_TABLE_SEGMENTS.out.pivoted_matrix,
+                CREATE_SQLITE_DB.out
+            )
+        } else if (params.is_segmented == "N") {
+            TEST_NON_SEGMENTED_OUTPUT(
+                BLAST_ALIGNMENT.out.query_uniq_tophits,
+                data,
+                CREATE_SQLITE_DB.out
+            )
+        }
+    }
 
     TEST_DB_VALIDATION(CREATE_SQLITE_DB.out)
 }
