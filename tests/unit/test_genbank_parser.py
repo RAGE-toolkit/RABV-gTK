@@ -1,5 +1,6 @@
-import csv
 from pathlib import Path
+from typing import Optional
+import sqlite3
 
 import pandas as pd
 import pytest
@@ -7,7 +8,14 @@ import pytest
 from GenBankParser import GenBankParser
 
 
-def _gbseq_xml(primary_accession: str, sequence: str, country: str = "UK:London", collection_date: str = "12-Jan-2020") -> str:
+def _gbseq_xml(
+    primary_accession: str,
+    sequence: str,
+    country: str = "UK:London",
+    collection_date: str = "12-Jan-2020",
+    accession_version: Optional[str] = None,
+) -> str:
+    accession_version = accession_version or f"{primary_accession}.1"
     return f"""
 <GBSeq>
   <GBSeq_locus>{primary_accession}</GBSeq_locus>
@@ -19,7 +27,7 @@ def _gbseq_xml(primary_accession: str, sequence: str, country: str = "UK:London"
   <GBSeq_create-date>01-JAN-2020</GBSeq_create-date>
   <GBSeq_definition>Example definition {primary_accession}</GBSeq_definition>
   <GBSeq_primary-accession>{primary_accession}</GBSeq_primary-accession>
-  <GBSeq_accession-version>{primary_accession}.1</GBSeq_accession-version>
+  <GBSeq_accession-version>{accession_version}</GBSeq_accession-version>
   <GBSeq_source>Virus</GBSeq_source>
   <GBSeq_organism>Virus organism</GBSeq_organism>
   <GBSeq_taxonomy>Viruses; Example</GBSeq_taxonomy>
@@ -58,6 +66,27 @@ def _gbseq_xml(primary_accession: str, sequence: str, country: str = "UK:London"
 def _write_xml(path: Path, gbseq_blocks):
     xml = "<GBSet>\n" + "\n".join(gbseq_blocks) + "\n</GBSet>\n"
     path.write_text(xml, encoding="utf-8")
+
+
+def _write_update_db(path: Path, existing_accessions=None, excluded_accessions=None):
+  existing_accessions = existing_accessions or []
+  excluded_accessions = excluded_accessions or []
+  conn = sqlite3.connect(str(path))
+  try:
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE meta_data (primary_accession TEXT)")
+    cur.executemany(
+      "INSERT INTO meta_data(primary_accession) VALUES (?)",
+      [(acc,) for acc in existing_accessions],
+    )
+    cur.execute("CREATE TABLE excluded_accessions (primary_accession TEXT, reason TEXT)")
+    cur.executemany(
+      "INSERT INTO excluded_accessions(primary_accession, reason) VALUES (?, ?)",
+      [(acc, "excluded") for acc in excluded_accessions],
+    )
+    conn.commit()
+  finally:
+    conn.close()
 
 
 def test_load_ref_list_supports_two_and_three_column_lines(tmp_path: Path):
@@ -160,3 +189,71 @@ def test_process_writes_matrix_and_fasta(tmp_path: Path):
     fasta_text = fasta_path.read_text(encoding="utf-8")
     assert ">REF1" in fasta_text
     assert ">Q1" in fasta_text
+
+
+def test_load_existing_accessions_from_db_requires_meta_data_table(tmp_path: Path):
+    bad_db = tmp_path / "bad.db"
+    conn = sqlite3.connect(str(bad_db))
+    try:
+        conn.execute("CREATE TABLE other_table (id TEXT)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    parser = GenBankParser(
+        input_dir=str(tmp_path),
+        base_dir=str(tmp_path),
+        output_dir="out",
+        ref_list=None,
+        exclusion_list=None,
+        is_segmented_virus="N",
+        update=str(bad_db),
+    )
+
+    with pytest.raises(ValueError, match="meta_data"):
+        parser.load_existing_accessions_from_db(str(bad_db))
+
+
+def test_process_update_mode_filters_by_existing_and_excluded_accessions(tmp_path: Path):
+    xml_dir = tmp_path / "GenBank-XML"
+    xml_dir.mkdir(parents=True, exist_ok=True)
+
+    _write_xml(
+        xml_dir / "batch-1.xml",
+        [
+            _gbseq_xml("REF1", "ATGC"),
+            _gbseq_xml("Q1", "AATT"),
+            _gbseq_xml("NEW1", "ATAT"),
+        ],
+    )
+
+    update_db = tmp_path / "previous.db"
+    _write_update_db(update_db, existing_accessions=["REF1"], excluded_accessions=["Q1"])
+
+    ref_file = tmp_path / "refs.tsv"
+    ref_file.write_text("REF1\tmaster\n", encoding="utf-8")
+
+    parser = GenBankParser(
+        input_dir=None,
+        base_dir=str(tmp_path),
+        output_dir="GenBank-matrix",
+        ref_list=str(ref_file),
+        exclusion_list=None,
+        is_segmented_virus="N",
+        update=str(update_db),
+    )
+    parser.process()
+
+    matrix_path = tmp_path / "GenBank-matrix" / "gB_matrix_raw.tsv"
+    fasta_path = tmp_path / "GenBank-matrix" / "sequences.fa"
+
+    assert matrix_path.exists()
+    assert fasta_path.exists()
+
+    df = pd.read_csv(matrix_path, sep="\t")
+    assert df["primary_accession"].tolist() == ["NEW1"]
+
+    fasta_text = fasta_path.read_text(encoding="utf-8")
+    assert ">NEW1" in fasta_text
+    assert ">Q1" not in fasta_text
+    assert ">REF1" not in fasta_text

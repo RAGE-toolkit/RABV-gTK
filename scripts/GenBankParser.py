@@ -1,6 +1,6 @@
 import os
+import sqlite3
 import pandas as pd
-from time import sleep
 from os.path import join
 import xml.etree.ElementTree as ET
 from argparse import ArgumentParser
@@ -9,8 +9,19 @@ from date_utils import split_date_components
 # add source example NCBI or GISAID, or user define, add temp sequences 
 # temp sequences which should available for temp purpose 
 class GenBankParser:
-	def __init__(self, input_dir, base_dir, output_dir, ref_list, exclusion_list, is_segmented_virus, test_run=False, test_xml_limit=10, require_refs=False):
-		self.input_dir = input_dir
+	def __init__(
+		self,
+		input_dir,
+		base_dir,
+		output_dir,
+		ref_list,
+		exclusion_list,
+		is_segmented_virus,
+		test_run=False,
+		test_xml_limit=10,
+		require_refs=False,
+		update=None,
+	):
 		self.base_dir = base_dir
 		self.output_dir = output_dir
 		self.ref_list = ref_list
@@ -19,11 +30,21 @@ class GenBankParser:
 		self.test_run = test_run
 		self.test_xml_limit = test_xml_limit
 		self.require_refs = require_refs
-		os.makedirs(join(self.base_dir, self.output_dir), exist_ok=True)
+		self.update_db_path = update
+		self.update_mode = bool(update)
+
+		if input_dir:
+			self.input_dir = input_dir
+		else:
+			self.input_dir = join(self.base_dir, 'GenBank-XML')
+
+		self.out_root = join(self.base_dir, self.output_dir)
+		os.makedirs(self.out_root, exist_ok=True)
+		self._existing_accessions = set()
 
 	def count_ATGCN(self, sequence):
 		nucl_dict = {'A': 0, 'T': 0, 'G': 0, 'C': 0, 'N': 0}
-		sequence = sequence.upper()
+		sequence = (sequence or '').upper()
 		for each_nucl in sequence:
 			if each_nucl in nucl_dict:
 				nucl_dict[each_nucl] += 1
@@ -66,6 +87,42 @@ class GenBankParser:
 			print(f"Warning: File {acc_list_file} not found. Proceeding with all the available sequences")
 		return list(exclusion_list)
 
+	def load_existing_accessions_from_db(self, db_path):
+		if not db_path:
+			raise ValueError('Update DB path not provided')
+		if not os.path.exists(db_path):
+			raise FileNotFoundError(f"Update DB not found: {db_path}")
+
+		existing = set()
+		conn = sqlite3.connect(db_path)
+		try:
+			cursor = conn.cursor()
+
+			cursor.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta_data' LIMIT 1")
+			if cursor.fetchone() is None:
+				raise ValueError('Update DB must contain table: meta_data')
+
+			cursor.execute("PRAGMA table_info(meta_data)")
+			meta_cols = {row[1] for row in cursor.fetchall()}
+			if 'primary_accession' not in meta_cols:
+				raise ValueError('Update DB table meta_data must contain column: primary_accession')
+
+			cursor.execute("SELECT primary_accession FROM meta_data WHERE primary_accession IS NOT NULL AND TRIM(primary_accession) != ''")
+			existing.update([row[0].strip() for row in cursor.fetchall() if row[0]])
+
+			cursor.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='excluded_accessions' LIMIT 1")
+			if cursor.fetchone() is not None:
+				cursor.execute("PRAGMA table_info(excluded_accessions)")
+				excl_cols = {row[1] for row in cursor.fetchall()}
+				if 'primary_accession' in excl_cols:
+					cursor.execute("SELECT primary_accession FROM excluded_accessions WHERE primary_accession IS NOT NULL AND TRIM(primary_accession) != ''")
+					existing.update([row[0].strip() for row in cursor.fetchall() if row[0]])
+		finally:
+			conn.close()
+
+		print(f"[update] Loaded {len(existing)} existing/excluded accessions from {db_path}")
+		return existing
+
 	def xml_to_tsv(self, xml_file, ref_seq_dict: dict, exclusion_acc_list: list):
 		tree = ET.parse(xml_file)
 		root = tree.getroot()
@@ -88,6 +145,11 @@ class GenBankParser:
 			content['definition'] = gbseq.find('GBSeq_definition').text
 			content['primary_accession'] = gbseq.find('GBSeq_primary-accession').text
 			content['accession_version'] = gbseq.find('GBSeq_accession-version').text
+
+			if self.update_mode and self._existing_accessions:
+				if content['primary_accession'] in self._existing_accessions:
+					continue
+
 			content['gi_number'] = content['primary_accession']
 			content['source'] = gbseq.find('GBSeq_source').text
 			content['organism'] = gbseq.find('GBSeq_organism').text
@@ -180,7 +242,7 @@ class GenBankParser:
 			if ":" in country:
 				tmp_country = country.split(":")
 				content['country'] = tmp_country[0]
-				content['geo_loc'] = tmp_country[1] if len(tmp_country) > 0 else ""
+				content['geo_loc'] = tmp_country[1] if len(tmp_country) > 1 else ""
 			else:
 				content['country'] = country
 				content['geo_loc'] = ""
@@ -310,6 +372,9 @@ class GenBankParser:
 		ref_seq_dict = self.load_ref_list(self.ref_list)
 		exclusion_acc_list = self.load_exclusion_list(self.exclusion_list)
 
+		if self.update_mode:
+			self._existing_accessions = self.load_existing_accessions_from_db(self.update_db_path)
+
 		xml_files = self.list_xml_files()
 		if self.require_refs and self.ref_list is None:
 			raise ValueError("Reference list is required when --require_refs is set")
@@ -333,6 +398,10 @@ class GenBankParser:
 					print(f"Warning: {len(missing_refs)} exclusion_list references were not found in XML input.")
 
 		total_xml = len(selected_xml_files)
+		if total_xml == 0:
+			print(f"No XML files found in: {self.input_dir}")
+			return
+
 		count = 1
 		merged_data = []
 		for each_xml in selected_xml_files:
@@ -341,19 +410,28 @@ class GenBankParser:
 			merged_data.extend(data)
 			count+=1
 
+		if not merged_data:
+			if self.update_mode:
+				print('[update] No new accessions found in XMLs (nothing to write).')
+			else:
+				print('No records parsed.')
+			return
+
 		df = pd.DataFrame(merged_data)
   		# this was subsetting on locus-??
 		df = df.drop_duplicates(subset='primary_accession', keep="last")
-		with open(join(self.base_dir, self.output_dir, "sequences.fa"), "w") as fasta_file:
+		with open(join(self.out_root, 'sequences.fa'), 'w') as fasta_file:
 			for _, row in df.iterrows():
 				fasta_file.write(f">{row['primary_accession']}\n{row['sequence']}\n")
 
 		df.drop(columns=['sequence'], inplace=True)
-		df.to_csv(join(self.base_dir, self.output_dir, "gB_matrix_raw.tsv"), sep="\t", index=False)
+		df.to_csv(join(self.out_root, 'gB_matrix_raw.tsv'), sep='\t', index=False)
+		print(f"Input XML dir used: {self.input_dir}")
+		print(f"Output dir used:    {self.out_root}")
 		
 if __name__ == "__main__":
 	parser = ArgumentParser(description='Extract GenBank XML files to a TSV table')
-	parser.add_argument('-d', '--input_dir', help='Input directory', default='tmp/GenBank-XML')
+	parser.add_argument('-d', '--input_dir', help='Input directory (optional override)', default=None)
 	parser.add_argument('-b', '--base_dir', help='Base directory', default='tmp')
 	parser.add_argument('-o', '--output_dir', help='Output directory', default='GenBank-matrix')
 	parser.add_argument('-r', '--ref_list', help='Set of reference accessions', required=True)
@@ -362,6 +440,7 @@ if __name__ == "__main__":
 	parser.add_argument('--test_run', action='store_true', help='Parse only a subset of XML files')
 	parser.add_argument('--test_xml_limit', type=int, default=10, help='Max number of XML files to parse in test mode')
 	parser.add_argument('--require_refs', action='store_true', help='Fail if any ref_list accession is missing in XML input')
+	parser.add_argument('--update', default=None, help='Path to existing SQLite DB generated by CreateSqliteDB.py; when set, skip accessions already present or excluded in that DB')
 	args = parser.parse_args()
 
 	gb_parser = GenBankParser(
@@ -374,6 +453,7 @@ if __name__ == "__main__":
 		test_run=args.test_run,
 		test_xml_limit=args.test_xml_limit,
 		require_refs=args.require_refs,
+		update=args.update,
 	)
 	gb_parser.process()
 
