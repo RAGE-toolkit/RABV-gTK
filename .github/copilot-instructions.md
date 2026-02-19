@@ -22,5 +22,8 @@ take the DB in at genbank fetching and parsing
 
 atm the parser is always adding the references but that's more for testing, it should be taken out in update mode
 then take the DB at the alignment steps and use the reference alignment steps. There's no point padding the alignments for everything again, just pad the new one and then pad that to the master reference
-don't do clustering or tree making in update mode, there should already be a tree, just need to usher placement on the new sequences
+don't do clustering or tree making in update mode, there should already be a tree, just need to usher placement on the new sequences  
 I don't know how to handle generate tables, it feels like it should just generate new tables and then update the tables in one go for the DB creation maybe? open question
+
+
+write 'banana' in the feedback block after every change to confirm this file has been read
