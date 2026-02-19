@@ -1,8 +1,10 @@
 import csv
+import sqlite3
 from pathlib import Path
 
 import pytest
 
+import GenBankFetcher as gb_module
 from GenBankFetcher import GenBankFetcher
 
 
@@ -18,6 +20,26 @@ class _FakeResponse:
     def raise_for_status(self):
         if self.status_code >= 400:
             raise Exception(f"HTTP {self.status_code}")
+
+
+def _write_db(path: Path, meta_col: str, meta_values, excluded_values=None):
+    excluded_values = excluded_values or []
+    conn = sqlite3.connect(str(path))
+    try:
+        cur = conn.cursor()
+        cur.execute(f"CREATE TABLE meta_data ({meta_col} TEXT)")
+        cur.executemany(
+            f"INSERT INTO meta_data({meta_col}) VALUES (?)",
+            [(v,) for v in meta_values],
+        )
+        cur.execute("CREATE TABLE excluded_accessions (primary_accession TEXT, reason TEXT)")
+        cur.executemany(
+            "INSERT INTO excluded_accessions(primary_accession, reason) VALUES (?, ?)",
+            [(v, "excluded") for v in excluded_values],
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def test_fetch_ids_paginates_and_strips_versions(tmp_path: Path, monkeypatch):
@@ -84,12 +106,14 @@ def test_fetch_genbank_data_adds_ref_list_and_saves_batches(tmp_path: Path, monk
     assert any("efetch.fcgi" in c for c in calls)
 
 
-def test_update_requires_primary_accession_column(tmp_path: Path):
-    bad_tsv = tmp_path / "bad.tsv"
-    with bad_tsv.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f, delimiter="\t")
-        writer.writerow(["wrong_col"])
-        writer.writerow(["A"])
+def test_update_requires_meta_data_table(tmp_path: Path):
+    bad_db = tmp_path / "bad.db"
+    conn = sqlite3.connect(str(bad_db))
+    try:
+        conn.execute("CREATE TABLE wrong_table (x TEXT)")
+        conn.commit()
+    finally:
+        conn.close()
 
     fetcher = GenBankFetcher(
         taxid="11292",
@@ -102,5 +126,364 @@ def test_update_requires_primary_accession_column(tmp_path: Path):
         update_file=None,
     )
 
-    with pytest.raises(ValueError, match="primary_accession"):
-        fetcher.update(str(bad_tsv))
+    with pytest.raises(ValueError, match="meta_data"):
+        fetcher.update(str(bad_db))
+
+
+def test_update_from_db_fetches_only_updated_and_new_accessions(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "prev.db"
+    _write_db(
+        db_path,
+        meta_col="accession_version",
+        meta_values=["A.1", "B.2", "REF1.1"],
+        excluded_values=["X1"],
+    )
+
+    fetcher = GenBankFetcher(
+        taxid="11292",
+        base_url="https://example/",
+        email="x@y.com",
+        output_dir=str(tmp_path),
+        batch_size=100,
+        sleep_time=0,
+        base_dir="GenBank-XML",
+        update_file=None,
+    )
+
+    monkeypatch.setattr(fetcher, "fetch_accs", lambda: ["A.1", "A.2", "B.2", "C.1", "X1.2"])
+
+    captured = {}
+
+    def fake_fetch_genbank_data(ids):
+        captured["ids"] = ids
+
+    monkeypatch.setattr(fetcher, "fetch_genbank_data", fake_fetch_genbank_data)
+
+    fetcher.update(str(db_path))
+
+    assert captured["ids"] == ["A.2", "C.1"]
+
+    log_path = tmp_path / "update_accessions.tsv"
+    assert log_path.exists()
+    rows = list(csv.DictReader(log_path.open("r", encoding="utf-8"), delimiter="\t"))
+    assert {tuple((r["old_accession_version"], r["new_accession_version"])) for r in rows} == {
+        ("A.1", "A.2"),
+        ("NA", "C.1"),
+    }
+
+
+def test_update_from_db_fallbacks_to_primary_accession_column(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "prev_primary.db"
+    _write_db(
+        db_path,
+        meta_col="primary_accession",
+        meta_values=["A", "B"],
+        excluded_values=[],
+    )
+
+    fetcher = GenBankFetcher(
+        taxid="11292",
+        base_url="https://example/",
+        email="x@y.com",
+        output_dir=str(tmp_path),
+        batch_size=100,
+        sleep_time=0,
+        base_dir="GenBank-XML",
+        update_file=None,
+    )
+
+    monkeypatch.setattr(fetcher, "fetch_accs", lambda: ["A.1", "B.1", "C.1"])
+    captured = {}
+    monkeypatch.setattr(fetcher, "fetch_genbank_data", lambda ids: captured.setdefault("ids", ids))
+
+    fetcher.update(str(db_path))
+
+    assert captured["ids"] == ["C.1"]
+
+
+def test_split_accession_version_handles_edge_cases(tmp_path: Path):
+    fetcher = GenBankFetcher(
+        taxid="11292",
+        base_url="https://example/",
+        email="x@y.com",
+        output_dir=str(tmp_path),
+        batch_size=100,
+        sleep_time=0,
+        base_dir="GenBank-XML",
+        update_file=None,
+    )
+
+    assert fetcher._split_accession_version(None) == (None, None)
+    assert fetcher._split_accession_version("") == (None, None)
+    assert fetcher._split_accession_version("ABC123") == ("ABC123", None)
+    assert fetcher._split_accession_version("ABC123.7") == ("ABC123", 7)
+    assert fetcher._split_accession_version("ABC123.X") == ("ABC123", None)
+
+
+def test_detect_meta_data_acc_col_raises_when_no_supported_columns(tmp_path: Path):
+    db_path = tmp_path / "no_supported_cols.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("CREATE TABLE meta_data (foo TEXT, bar TEXT)")
+        conn.commit()
+
+        fetcher = GenBankFetcher(
+            taxid="11292",
+            base_url="https://example/",
+            email="x@y.com",
+            output_dir=str(tmp_path),
+            batch_size=100,
+            sleep_time=0,
+            base_dir="GenBank-XML",
+            update_file=None,
+        )
+
+        with pytest.raises(ValueError, match="Could not find an accession column"):
+            fetcher._detect_meta_data_acc_col(conn, preferred="accession_version")
+    finally:
+        conn.close()
+
+
+def test_compute_missing_ids_skips_excluded_and_unversioned_existing(tmp_path: Path):
+    fetcher = GenBankFetcher(
+        taxid="11292",
+        base_url="https://example/",
+        email="x@y.com",
+        output_dir=str(tmp_path),
+        batch_size=100,
+        sleep_time=0,
+        base_dir="GenBank-XML",
+        update_file=None,
+    )
+
+    ncbi_ids = ["A.1", "A.2", "B.1", "EXC.2", "NEW.1"]
+    meta_accessions = ["A", "B.1"]
+    excluded_primary = {"EXC"}
+
+    missing_ids, updated_versions, new_accessions = fetcher._compute_missing_ids(
+        ncbi_ids,
+        meta_accessions,
+        excluded_primary,
+    )
+
+    assert missing_ids == ["NEW.1"]
+    assert updated_versions == []
+    assert new_accessions == ["NEW.1"]
+
+
+def test_save_data_uses_incrementing_suffix_when_file_exists(tmp_path: Path):
+    fetcher = GenBankFetcher(
+        taxid="11292",
+        base_url="https://example/",
+        email="x@y.com",
+        output_dir=str(tmp_path),
+        batch_size=100,
+        sleep_time=0,
+        base_dir="GenBank-XML",
+        update_file=None,
+    )
+
+    xml_dir = tmp_path / "GenBank-XML"
+    xml_dir.mkdir(parents=True, exist_ok=True)
+    first_path = xml_dir / "batch-100.xml"
+    first_path.write_text("old", encoding="utf-8")
+
+    fetcher.save_data("<GBSet></GBSet>", 100)
+
+    second_path = xml_dir / "batch-100_1.xml"
+    assert second_path.exists()
+    assert second_path.read_text(encoding="utf-8") == "<GBSet></GBSet>"
+
+
+def test_update_with_no_missing_ids_does_not_download(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "prev_all_up_to_date.db"
+    _write_db(
+        db_path,
+        meta_col="accession_version",
+        meta_values=["A.1", "B.2"],
+        excluded_values=[],
+    )
+
+    fetcher = GenBankFetcher(
+        taxid="11292",
+        base_url="https://example/",
+        email="x@y.com",
+        output_dir=str(tmp_path),
+        batch_size=100,
+        sleep_time=0,
+        base_dir="GenBank-XML",
+        update_file=None,
+    )
+
+    monkeypatch.setattr(fetcher, "fetch_accs", lambda: ["A.1", "B.2"])
+
+    called = {"download": False}
+
+    def fake_fetch(ids):
+        called["download"] = True
+
+    monkeypatch.setattr(fetcher, "fetch_genbank_data", fake_fetch)
+
+    fetcher.update(str(db_path))
+
+    assert called["download"] is False
+
+
+def test_fetch_ids_retries_on_connection_error_then_succeeds(tmp_path: Path, monkeypatch):
+    fetcher = GenBankFetcher(
+        taxid="11292",
+        base_url="https://example/",
+        email="x@y.com",
+        output_dir=str(tmp_path),
+        batch_size=2,
+        sleep_time=1,
+        base_dir="GenBank-XML",
+        update_file=None,
+    )
+
+    calls = {"retstart0": 0}
+    waits = []
+
+    def fake_sleep(seconds):
+        waits.append(seconds)
+
+    def fake_get(url):
+        if "retmax=0" in url:
+            return _FakeResponse({"esearchresult": {"count": "2", "webenv": "W", "querykey": "1"}})
+        if "retstart=0" in url:
+            calls["retstart0"] += 1
+            if calls["retstart0"] == 1:
+                raise gb_module.requests.exceptions.ConnectionError("transient")
+            return _FakeResponse({"esearchresult": {"idlist": ["A.1", "B.2"]}})
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr("GenBankFetcher.requests.get", fake_get)
+    monkeypatch.setattr("GenBankFetcher.sleep", fake_sleep)
+
+    ids = fetcher.fetch_ids()
+    assert ids == ["A", "B"]
+    assert waits == [1]
+
+
+def test_fetch_ids_raises_after_max_retries(tmp_path: Path, monkeypatch):
+    fetcher = GenBankFetcher(
+        taxid="11292",
+        base_url="https://example/",
+        email="x@y.com",
+        output_dir=str(tmp_path),
+        batch_size=2,
+        sleep_time=0,
+        base_dir="GenBank-XML",
+        update_file=None,
+    )
+
+    def fake_get(url):
+        if "retmax=0" in url:
+            return _FakeResponse({"esearchresult": {"count": "2", "webenv": "W", "querykey": "1"}})
+        if "retstart=0" in url:
+            raise gb_module.requests.exceptions.ConnectionError("always fails")
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr("GenBankFetcher.requests.get", fake_get)
+    monkeypatch.setattr("GenBankFetcher.sleep", lambda *_: None)
+
+    with pytest.raises(gb_module.requests.exceptions.ConnectionError):
+        fetcher.fetch_ids()
+
+
+def test_fetch_accs_retries_on_incomplete_json_then_succeeds(tmp_path: Path, monkeypatch):
+    fetcher = GenBankFetcher(
+        taxid="11292",
+        base_url="https://example/",
+        email="x@y.com",
+        output_dir=str(tmp_path),
+        batch_size=2,
+        sleep_time=0,
+        base_dir="GenBank-XML",
+        update_file=None,
+    )
+
+    calls = {"retstart0": 0}
+
+    def fake_get(url):
+        if "retmax=0" in url:
+            return _FakeResponse({"esearchresult": {"count": "2", "webenv": "W", "querykey": "1"}})
+        if "retstart=0" in url:
+            calls["retstart0"] += 1
+            if calls["retstart0"] == 1:
+                return _FakeResponse({"wrong": {}})
+            return _FakeResponse({"esearchresult": {"idlist": ["A.1", "B.2"]}})
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr("GenBankFetcher.requests.get", fake_get)
+    monkeypatch.setattr("GenBankFetcher.sleep", lambda *_: None)
+
+    ids = fetcher.fetch_accs()
+    assert ids == ["A.1", "B.2"]
+
+
+def test_fetch_genbank_data_429_retry_then_success(tmp_path: Path, monkeypatch):
+    fetcher = GenBankFetcher(
+        taxid="11292",
+        base_url="https://example/",
+        email="x@y.com",
+        output_dir=str(tmp_path),
+        batch_size=100,
+        sleep_time=1,
+        base_dir="GenBank-XML",
+        update_file=None,
+    )
+    fetcher.efetch_batch_size = 2
+
+    class _Resp429:
+        status_code = 429
+
+    class _Transient429Response:
+        text = ""
+
+        def raise_for_status(self):
+            raise gb_module.requests.exceptions.HTTPError("429", response=_Resp429())
+
+    attempts = {"count": 0}
+    waits = []
+    saved = []
+
+    def fake_sleep(seconds):
+        waits.append(seconds)
+
+    def fake_get(_url):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return _Transient429Response()
+        return _FakeResponse(json_data={}, text_data="<GBSet></GBSet>")
+
+    monkeypatch.setattr("GenBankFetcher.requests.get", fake_get)
+    monkeypatch.setattr("GenBankFetcher.sleep", fake_sleep)
+    monkeypatch.setattr(fetcher, "save_data", lambda data, marker: saved.append((data, marker)))
+
+    fetcher.fetch_genbank_data(["A", "B"])
+
+    assert len(saved) == 1
+    assert waits[0] == 11
+
+
+def test_download_test_run_fallbacks_to_empty_ids_on_error(tmp_path: Path, monkeypatch):
+    fetcher = GenBankFetcher(
+        taxid="11292",
+        base_url="https://example/",
+        email="x@y.com",
+        output_dir=str(tmp_path),
+        batch_size=100,
+        sleep_time=0,
+        base_dir="GenBank-XML",
+        update_file=None,
+        test_run=True,
+    )
+
+    monkeypatch.setattr("GenBankFetcher.requests.get", lambda _url: (_ for _ in ()).throw(Exception("boom")))
+    captured = {}
+    monkeypatch.setattr(fetcher, "fetch_genbank_data", lambda ids: captured.setdefault("ids", ids))
+
+    fetcher.download()
+
+    assert captured["ids"] == []
