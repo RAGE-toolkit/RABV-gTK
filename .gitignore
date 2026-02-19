@@ -12,7 +12,7 @@ flu_reference_set/
 bin/veryfasttree/*
 dev
 dag*.html
-report*.html
+*report*.html
 tests/__pycache__/
 tests/unit/__pycache__/*
 */__pycache__/
