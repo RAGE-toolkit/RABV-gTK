@@ -12,13 +12,16 @@ class BlastAlignment:
     _BLANKISH = {"", "-", "na", "n/a", "NA", "Na", "N/A"}
 
     def __init__(self, gb_matrix: str, curated_file: str,
-                 base_dir: str = "tmp", output_dir: str = "Curated",
-                 output_file: str = "gB_matrix.tsv") -> None:
+             base_dir: str = "tmp", output_dir: str = "Curated",
+             output_file: str = "gB_matrix.tsv",
+             update: bool = False) -> None:
+
         self.gb_matrix = gb_matrix
         self.curated_file = curated_file
         self.base_dir = base_dir
         self.output_dir = output_dir
         self.output_file = output_file
+        self.update = update
 
     # ---------------------- Public API ----------------------
 
@@ -108,10 +111,25 @@ class BlastAlignment:
                         target[curator_col] = self._append_unique(existing_curator, curated_curator)
 
         # --- Write output ---
+        '''
         out_dir = os.path.join(self.base_dir, self.output_dir)
         os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, self.output_file)
         self._write_tsv(out_path, gb_header, gb_rows)
+        '''
+        # Decide base output root
+        base_out = os.path.join(self.base_dir, "Update") if self.update else self.base_dir
+
+        out_dir = os.path.join(base_out, self.output_dir)
+        os.makedirs(out_dir, exist_ok=True)
+
+        # 1) Normal output file (unchanged naming/location pattern)
+        out_path = os.path.join(out_dir, self.output_file)
+        self._write_tsv(out_path, gb_header, gb_rows)
+
+        # 2) ALSO write back to the input gb_matrix file (overwrite)
+        #    (This is what you asked: "write the same thing to the input file")
+        self._write_tsv(self.gb_matrix, gb_header, gb_rows)
 
         # --- Summary ---
         print("\n=== Curation Summary ===")
@@ -201,14 +219,15 @@ def _build_argparser() -> ArgumentParser:
                    default='generic/curation.tsv')
     p.add_argument('-b', '--base_dir', help='Base directory for outputs', default='tmp')
     p.add_argument('-t', '--output_dir', help='Output subdirectory', default='Curated')
-    p.add_argument('-o', '--output_file', help='Output filename (TSV)', default='gB_matrix.tsv')
+    p.add_argument('-o', '--output_file', help='Output filename (TSV)', default='gB_matrix_raw.tsv')
+    p.add_argument('--update', action='store_true',
+               help='Update mode: write outputs under tmp/Update and overwrite input gb_matrix')
     return p
-
 
 def main() -> None:
     args = _build_argparser().parse_args()
     BlastAlignment(
-        args.gb_matrix, args.curated_file, args.base_dir, args.output_dir, args.output_file
+        args.gb_matrix, args.curated_file, args.base_dir, args.output_dir, args.output_file, update=args.update,
     ).process()
 
 

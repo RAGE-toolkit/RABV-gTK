@@ -8,13 +8,19 @@ import read_file
 import subprocess
 import pandas as pd
 from Bio import SeqIO
-from os.path import join
+from pathlib import Path
 from datetime import datetime
+from os.path import join, normpath
 from argparse import ArgumentParser
 from collections import defaultdict
 
+
+'''
+Update mode:
+	python scripts/CreateSqliteDB.py --meta_data tmp/Update/GenBank-matrix/gB_matrix_raw.tsv --features tmp/Update/Tables/features.tsv --pad_aln tmp/Update/Tables/sequence_alignment.tsv --fasta_sequences tmp/Update/GenBank-matrix/sequences.fa --host_taxa_file tmp/Update/HostTaxa/Host_taxa.tsv
+'''
 class CreateSqliteDB:
-	def __init__(self, meta_data, features, pad_aln, gene_info, m49_countries, m49_interm_region, m49_regions, m49_sub_regions, proj_settings, fasta_sequence_file, insertions, host_taxa_file, base_dir, output_dir, db_name, db_status, tree_file=None, iqtree_file=None, usher_tree=None, cluster_tsv=None, cluster_min_seq_id=None, filtered_ids_file=None, filtered_details_file=None, tree_manifest=None):
+	def __init__(self, meta_data, features, pad_aln, gene_info, m49_countries, m49_interm_region, m49_regions, m49_sub_regions, proj_settings, fasta_sequence_file, base_dir, output_dir, db_name, db_status, host_taxa_file, host_lineage_file, host_children_file, tree_file=None, iqtree_file=None, usher_tree=None, tree_dir=None, cluster_tsv=None, cluster_min_seq_id=None, filtered_ids_file=None, filtered_details_file=None, tree_manifest=None):
 		self.meta_data = meta_data
 		self.features = features
 		self.pad_aln = pad_aln
@@ -25,8 +31,6 @@ class CreateSqliteDB:
 		self.m49_sub_regions = m49_sub_regions
 		self.proj_settings = proj_settings
 		self.fasta_sequence_file = fasta_sequence_file
-		self.insertions = insertions
-		self.host_taxa_file = host_taxa_file
 		self.base_dir = base_dir
 		self.output_dir = output_dir
 		self.db_name = db_name
@@ -39,7 +43,49 @@ class CreateSqliteDB:
 		self.filtered_ids_file = filtered_ids_file
 		self.filtered_details_file = filtered_details_file
 		self.tree_manifest = tree_manifest
+		self.tree_dir = tree_dir
+		self.host_taxa_file = host_taxa_file
+		self.host_lineage_file = host_lineage_file
+		self.host_children_file = host_children_file
 
+	#-----
+	@staticmethod
+	def _read_delimited(path: str, dtype=None) -> pd.DataFrame:
+		return pd.read_csv(path, sep=None, engine="python", dtype=dtype)
+
+    # NEW: load multiple trees based on tree_dir/meta_data.tsv
+	def load_trees_from_dir(self, tree_dir: str) -> pd.DataFrame:
+
+		manifest_path = join(tree_dir, "meta_data.tsv")
+	
+		if not os.path.exists(manifest_path):
+			raise FileNotFoundError(f"Tree manifest not found: {manifest_path}")
+
+		df_manifest = self._read_delimited(manifest_path, dtype=str)
+
+		required = {"chromosome", "segment_number", "tree_type", "tree_name", "tree_model"}
+		missing = required - set(df_manifest.columns)
+		if missing:
+			raise ValueError(
+				f"Tree manifest missing columns: {sorted(missing)}. Found: {list(df_manifest.columns)}"
+			)
+
+		rows = []
+		for _, r in df_manifest.iterrows():
+			tree_name = str(r["tree_name"]).strip()
+			tree_path = join(tree_dir, tree_name)
+			if not os.path.exists(tree_path):
+				raise FileNotFoundError(f"Tree file listed in manifest not found: {tree_path}")
+
+			tree_newick = Path(tree_path).read_text(encoding="utf-8").strip()
+
+			out = dict(r)
+			out["tree_path"] = tree_path
+			out["newick"] = tree_newick
+			rows.append(out)
+			
+		return pd.DataFrame(rows)
+	#-----
 	@staticmethod
 	def _read_tree_file(tree_path):
 		if not tree_path:
@@ -235,8 +281,10 @@ class CreateSqliteDB:
 		self._require_file(self.m49_sub_regions, "m49_sub_regions")
 		self._require_file(self.proj_settings, "proj_settings")
 		self._require_file(self.fasta_sequence_file, "fasta_sequences")
-		self._require_file(self.insertions, "insertions")
+		#self._require_file(self.insertions, "insertions")
 		self._require_file(self.host_taxa_file, "host_taxa_file")
+		self._require_file(self.host_lineage_file, "host_lineage_file")
+		self._require_file(self.host_children_file, "host_children_file")
 		
 		excluded_records = []
 
@@ -304,9 +352,11 @@ class CreateSqliteDB:
 		df_m49_region = self._read_csv_required(join(self.m49_regions), [], "m49_regions")
 		df_m49_sub_region = self._read_csv_required(join(self.m49_sub_regions), [], "m49_sub_regions")
 		df_proj_setting = self._read_tsv_required(join(self.proj_settings), [], "proj_settings")
-		df_insertions = self._read_tsv_required(join(self.insertions), [], "insertions")
-		df_insertions = self._ensure_primary_accession(df_insertions, "insertions", aliases=["accession", "sequence_id"])
+		#df_insertions = self._ensure_primary_accession(df_insertions, "insertions", aliases=["accession", "sequence_id"])
 		df_host_taxa = self._read_tsv_required(join(self.host_taxa_file), [], "host_taxa_file", dtype=str)
+		df_host_lineage = self._read_tsv_required(join(self.host_lineage_file), [], "host_lineage_file", dtype=str)
+		df_host_children = self._read_tsv_required(join(self.host_children_file), [], "host_children_file", dtype=str)
+
 		df_fasta_sequences = self.load_fasta()
 		conn = sqlite3.connect(join(output_dir, self.db_name + ".db"))
 		cursor = conn.cursor()
@@ -321,8 +371,17 @@ class CreateSqliteDB:
 		df_m49_sub_region.to_sql("m49_sub_regions", conn, if_exists="replace", index=False)
 		df_proj_setting.to_sql("project_settings", conn, if_exists="replace", index=False)
 		df_fasta_sequences.to_sql("sequences", conn, if_exists="replace", index=False)
-		df_insertions.to_sql("insertions", conn, if_exists="replace", index=False)
+		#df_insertions.to_sql("insertions", conn, if_exists="replace", index=False)
 		df_host_taxa.to_sql("host_taxa", conn, if_exists="replace", index=False)
+		df_host_lineage.to_sql("host_lineage", conn, if_exists="replace", index=False)
+		df_host_children.to_sql("host_children", conn, if_exists="replace", index=False)
+		
+		df_trees = None
+		if self.tree_dir:
+			df_trees = self.load_trees_from_dir(self.tree_dir)
+			
+			#df_trees.to_sql("trees", conn, if_exists="replace", index=False)
+
 		
 		if excluded_records:
 			df_excluded = pd.DataFrame(excluded_records)
@@ -332,6 +391,9 @@ class CreateSqliteDB:
 		else:
 			cursor.execute("CREATE TABLE IF NOT EXISTS excluded_accessions (primary_accession TEXT, reason TEXT)")
 
+		if df_trees is not None:
+			df_trees.to_sql("trees", conn, if_exists="replace", index=False)
+	
 		cursor.execute("PRAGMA foreign_keys = ON;")
 
 		cursor.execute("""CREATE TABLE IF NOT EXISTS meta_data AS SELECT * FROM meta_data;""")
@@ -344,11 +406,11 @@ class CreateSqliteDB:
 		cursor.execute("""CREATE TABLE IF NOT EXISTS m49_sub_regions AS SELECT * FROM m49_sub_regions;""")
 		cursor.execute("""CREATE TABLE IF NOT EXISTS project_settings AS SELECT * FROM project_settings;""")
 		cursor.execute("""CREATE TABLE IF NOT EXISTS sequences AS SELECT * FROM sequences;""")
-		cursor.execute("""CREATE TABLE IF NOT EXISTS insertions AS SELECT * FROM insertions;""")
+		#cursor.execute("""CREATE TABLE IF NOT EXISTS insertions AS SELECT * FROM insertions;""")
 		cursor.execute("""CREATE TABLE IF NOT EXISTS host_taxa AS SELECT * FROM host_taxa;""")
 		cursor.execute("""CREATE TABLE IF NOT EXISTS excluded_accessions AS SELECT * FROM excluded_accessions;""")
 
-		cursor.execute("""CREATE TABLE IF NOT EXISTS trees (name TEXT, source TEXT, segment_key TEXT, segment TEXT, newick TEXT, created_at TEXT);""")
+		#cursor.execute("""CREATE TABLE IF NOT EXISTS trees (name TEXT, source TEXT, segment_key TEXT, segment TEXT, newick TEXT, created_at TEXT);""")
 		now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 		accession_to_segment = {}
@@ -424,6 +486,7 @@ class CreateSqliteDB:
 		conn.close()
 
 def process(args):
+	#args.insertion_file, after fasta_sequences,
 	db_creator = CreateSqliteDB(
 			args.meta_data,
 			args.features,
@@ -435,21 +498,23 @@ def process(args):
 			args.m49_sub_regions,
 			args.proj_settings,
 			args.fasta_sequences,
-			args.insertion_file,
-			args.host_taxa_file,
 			args.base_dir,
 			args.output_dir,
 			args.db_name,
 			args.db_status,
+			args.host_taxa_file,
+    		args.host_lineage_file,
+    		args.host_children_file,
 			args.tree_file,
 			args.iqtree_file,
 			args.usher_tree,
+			args.tree_dir,
 			args.cluster_tsv,
 			args.cluster_min_seq_id,
 			args.filtered_ids,
 			args.filtered_details,
 			args.tree_manifest,
-		)
+			)
 	db_creator.create_db()
 
 
@@ -468,8 +533,7 @@ if __name__ == "__main__":
 	parser.add_argument('-msr', '--m49_sub_regions', help='M49 sub-regions', default="assets/m49_sub_region.csv")
 	parser.add_argument('-s', '--proj_settings', help='Project settings', default="tmp/Software_info/software_info.tsv")
 	parser.add_argument('-fa', '--fasta_sequences', help='Fasta sequences', default="tmp/GenBank-matrix/sequences.fa")
-	parser.add_argument('-i', '--insertion_file', help='Nextalign insertion file', default="tmp/Tables/insertions.tsv")
-	parser.add_argument('-ht', '--host_taxa_file', help='Host Taxanomy file', default="tmp/HostTaxa/Host_taxa.tsv")
+	#parser.add_argument('-i', '--insertion_file', help='Nextalign insertion file', default="tmp/Tables/insertions.tsv")
 	parser.add_argument('-d', '--db_name', help='Name of the Sqlite database', default="gdb")
 	parser.add_argument('-ds', '--db_status', help='Database status: "new db" (default) or "last modified"/"last updated". Determines info.creation_type.',default="new db")
 	parser.add_argument('-t', '--tree_file', help='VeryFastTree Newick file', default=None)
@@ -480,8 +544,25 @@ if __name__ == "__main__":
 	parser.add_argument('-ci', '--cluster_min_seq_id', help='MMseqs min sequence identity used for clustering', default=None)
 	parser.add_argument('-fi', '--filtered_ids', help='File with filtered sequence IDs (one per line) to exclude from DB', default=None)
 	parser.add_argument('-fd', '--filtered_details', help='TSV with filtered sequence details (seq_name, reference, error, warnings)', default=None)
-
+	parser.add_argument(
+		"--update",
+		action="store_true",
+		help="If enabled, write DB output under <base_dir>/Update (e.g., tmp/Update/...)"
+	)
+	parser.add_argument(
+		"--tree_dir",
+		help="Directory containing tree files and a manifest meta_data.tsv (chromosome, segment_number, tree_type, tree_name, tree_model).",
+		default=None,
+	)
+	parser.add_argument("-ht", "--host_taxa_file", help="Host Taxanomy file", default="tmp/HostTaxa/Host_taxa.tsv")
+	parser.add_argument("-hl", "--host_lineage_file", help="Host Lineage file", default="tmp/HostTaxa/Host_taxa_lineage.tsv")
+	parser.add_argument("-hc", "--host_children_file", help="Host Children file", default="tmp/HostTaxa/Host_taxa_children.tsv")
+	
 	args = parser.parse_args()
+	if args.update:
+		# base_dir -> base_dir/Update (avoid Update/Update)
+		if not normpath(args.base_dir).endswith(normpath("Update")):
+			args.base_dir = join(args.base_dir, "Update")
 	try:
 		process(args)
 	except Exception as exc:

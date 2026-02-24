@@ -6,9 +6,17 @@ import pandas as pd
 from Bio import SeqIO
 from Bio.Seq import Seq
 from os.path import join
+from os.path import join, normpath
 from argparse import ArgumentParser
 from TextFileHandler import TextFileLoader
 from FastaHandler import RemoveRedundantSequence
+
+'''
+Normal mode: 
+	python scripts/NextalignAlignment.py
+Update mode:
+	python scripts/NextalignAlignment.py --gB_matrix tmp/Update/GenBank-matrix/gB_matrix_raw.tsv --query_dir tmp/Update/Blast/grouped_fasta/ --ref_dir ./../../rabv-vgtk/V-gTK/tmp/Blast/ref_seqs/ --ref_fa_file ./../../rabv-vgtk/V-gTK/tmp/Sequences/ref_seq.fa --master_seq_dir ./../../rabv-vgtk/V-gTK/tmp/Blast/master_seq/ --master_ref NC_001542 --update
+'''
 
 class NextalignAlignment:
 	def __init__(self, gb_matrix, query_dir, ref_dir, ref_fa_file, master_seq_dir, tmp_dir, master_ref, nextalign_dir, reference_alignment):
@@ -184,7 +192,35 @@ if __name__ == "__main__":
 	parser.add_argument('-m', '--master_ref', help='Master reference accession. Generally, the Ref Seq accession. In case of Rabies it is NC_001542', required=True)
 	parser.add_argument('-n', '--nextalign_dir', help='Nextalign output to be saved', default="Nextalign")
 	parser.add_argument('-ra', '--ref_alignment_file', help='Use your own reference alignment file instead of Nextalign perfoms the alignment of reference against the master reference sequence')
+	parser.add_argument(
+    	'--update',
+    	action='store_true',
+    	help="If enabled, write all outputs under <tmp_dir>/Update (e.g., tmp/Update/...)"
+	)	
 	args = parser.parse_args()
+
+	# --- update mode: move everything under <tmp_dir>/Update ---
+	if args.update:
+		# tmp_dir -> tmp_dir/Update (avoid Update/Update)
+		if not normpath(args.tmp_dir).endswith(normpath("Update")):
+			args.tmp_dir = join(args.tmp_dir, "Update")
+
+		# Rewrite defaults only (do not override user-provided custom paths)
+		if normpath(args.gB_matrix) == normpath("tmp/GenBank-matrix/gB_matrix_raw.tsv"):
+			args.gB_matrix = join(args.tmp_dir, "GenBank-matrix", "gB_matrix_raw.tsv")
+
+		if normpath(args.query_dir) == normpath("tmp/Blast/grouped_fasta"):
+			args.query_dir = join(args.tmp_dir, "Blast", "grouped_fasta")
+
+		if normpath(args.ref_dir) == normpath("tmp/Blast/ref_seqs"):
+			args.ref_dir = join(args.tmp_dir, "Blast", "ref_seqs")
+
+		if normpath(args.ref_fa_file) == normpath("tmp/Sequences/ref_seq.fa"):
+			args.ref_fa_file = join(args.tmp_dir, "Sequences", "ref_seq.fa")
+
+		if normpath(args.master_seq_dir) == normpath("tmp/Blast/master_seq"):
+			args.master_seq_dir = join(args.tmp_dir, "Blast", "master_seq")
+# ---------------------------------------------------------
 
 	processor = NextalignAlignment(args.gB_matrix, args.query_dir, args.ref_dir, args.ref_fa_file, args.master_seq_dir, args.tmp_dir, args.master_ref, args.nextalign_dir, args.ref_alignment_file)
 	processor.process()

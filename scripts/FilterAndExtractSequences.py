@@ -4,7 +4,15 @@ import shutil
 import tempfile
 from Bio import SeqIO
 from os.path import join
+from os.path import join, normpath
 from argparse import ArgumentParser
+
+'''
+Normal mode:
+	python scripts/FilterAndExtractSequences.py --genbank_matrix tmp/Update/GenBank-matrix/gB_matrix_raw.tsv --ref_file generic/rabv/ref_list.txt
+Update mode:
+	python scripts/FilterAndExtractSequences.py --genbank_matrix tmp/Update/GenBank-matrix/gB_matrix_raw.tsv --ref_file generic/rabv/ref_list.txt --update
+'''
 
 #genbank_divisions = ['VRL', 'PAT', 'SYN', 'ENV']
 
@@ -214,7 +222,27 @@ if __name__ == "__main__":
     )
 	parser.add_argument('-vd', '--valid_divisions', help="Valid GenBank divisions to be considered for the analysis", nargs='+', default=['VRL', 'ENV'], type=str)
 	parser.add_argument('-s', '--seq_type', help='Sequence type', default=None, type=str)
+	parser.add_argument(
+    	'--update',
+    	action='store_true',
+    	help="If enabled, write all outputs under <base_dir>/Update (e.g., tmp/Update/...)"
+	)
 	args = parser.parse_args()
+
+	# --- update mode: move everything under <base_dir>/Update ---
+	if args.update:
+		# base_dir -> base_dir/Update (avoid Update/Update)
+		if not normpath(args.base_dir).endswith(normpath("Update")):
+			args.base_dir = join(args.base_dir, "Update")
+
+		# If user did NOT override these defaults, rewrite them into Update
+		if normpath(args.sequence_file) == normpath("tmp/GenBank-matrix/sequences.fa"):
+			args.sequence_file = join(args.base_dir, "GenBank-matrix", "sequences.fa")
+
+		if normpath(args.genbank_matrix_filtered) == normpath("tmp/GenBank-matrix"):
+			args.genbank_matrix_filtered = join(args.base_dir, "GenBank-matrix")
+
+# -----------------------------------------------------------
 
 	processor = FilterAndExtractSequences(
 		genbank_matrix=args.genbank_matrix,

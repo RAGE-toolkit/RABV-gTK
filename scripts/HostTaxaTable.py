@@ -3,7 +3,14 @@ import csv
 import sys
 import argparse
 from os.path import join
+from os.path import join, normpath
 
+'''
+Normal mode:
+  python scripts/HostTaxaTable.py
+Update mode:
+  python scripts/HostTaxaTable.py --gb_matrix tmp/Update/GenBank-matrix/gB_matrix_raw.tsv --names tmp/Update/Taxa/names.dmp --nodes tmp/Update/Taxa/nodes.dmp --update
+'''
 
 class HostTaxaTable:
   def __init__(self,
@@ -159,7 +166,7 @@ class HostTaxaTable:
 
   
     ranks_order = ["superkingdom", "phylum", "class",
-                   "order", "family", "genus", "species"]
+                   "order_category", "family", "genus", "species"]
 
     with open(lineage_op_file, "w", encoding="utf-8", newline="") as out_lin:
       writer = csv.writer(out_lin, delimiter="\t")
@@ -167,7 +174,8 @@ class HostTaxaTable:
 
       for taxid in taxa_list:
         lineage = self._build_lineage_labels(taxid, parent_map, rank_map, sci_names)
-        row = [taxid] + [lineage.get(r, "") for r in ranks_order]
+        #row = [taxid] + [lineage.get(r, "") for r in ranks_order]
+        row = [taxid] + [lineage.get(("order" if r == "order_category" else r), "") for r in ranks_order]
         writer.writerow(row)
 
     print(f"Host taxa table written to {host_op_file}")
@@ -203,8 +211,29 @@ if __name__ == "__main__":
   parser.add_argument("-y", "--lineage_output_file",
                       default="Host_taxa_lineage.tsv",
                       help="Output TSV file for lineage / hierarchy table")
+  
+  parser.add_argument(
+    "--update",
+    action="store_true",
+    help="If enabled, write all outputs under <base_dir>/Update (e.g., tmp/Update/...)"
+  )
   args = parser.parse_args()
 
+  if args.update:
+    # base_dir -> base_dir/Update (avoid Update/Update)
+    if not normpath(args.base_dir).endswith(normpath("Update")):
+      args.base_dir = join(args.base_dir, "Update")
+
+    # Rewrite defaults only (do not override user-provided custom paths)
+    if normpath(args.gb_matrix) == normpath("tmp/GenBank-matrix/gB_matrix_raw.tsv"):
+      args.gb_matrix = join(args.base_dir, "GenBank-matrix", "gB_matrix_raw.tsv")
+
+    if normpath(args.names) == normpath("tmp/Taxa/names.dmp"):
+      args.names = join(args.base_dir, "Taxa", "names.dmp")
+
+    if normpath(args.nodes) == normpath("tmp/Taxa/nodes.dmp"):
+      args.nodes = join(args.base_dir, "Taxa", "nodes.dmp")
+  
   write_taxa = HostTaxaTable(
     args.gb_matrix,
     args.output_dir,

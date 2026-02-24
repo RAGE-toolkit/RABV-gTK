@@ -9,8 +9,15 @@ import hashlib
 from os.path import join
 from itertools import islice
 from datetime import datetime
+from os.path import join, normpath
 from argparse import ArgumentParser
 
+'''
+Normal mode:
+    python scripts/ValidateMatrix.py --gb_matrix tmp/Update/GenBank-matrix/gB_matrix_raw.tsv
+Update mode: 
+    python scripts/ValidateMatrix.py --gb_matrix tmp/Update/GenBank-matrix/gB_matrix_raw.tsv --update
+'''
 
 class ValidateMatrix:
     def __init__(self, url, taxa_path, base_dir, output_dir, gb_matrix, country_file, assets, host_map, country_map):
@@ -385,9 +392,26 @@ def main():
     parser.add_argument('-g', '--gb_matrix', default="tmp/GenBank-matrix/gB_matrix_raw.tsv")
     parser.add_argument('-c', '--country', default='assets/m49_country.csv')
     parser.add_argument('-a', '--assets', default='assets/')
-    parser.add_argument('-m', '--host_map', default="generic/rabv/host_mapping.tsv")
-    parser.add_argument('-n', '--country_map', default="generic/rabv/country_mapping.tsv")
+    parser.add_argument('-m', '--host_map', default="generic/rabv/mapping_files/host_mapping.tsv")
+    parser.add_argument('-n', '--country_map', default="generic/rabv/mapping_files/country_mapping.tsv")
+    parser.add_argument('--update', action='store_true',
+                        help="If enabled, write all outputs under <base_dir>/Update (e.g., tmp/Update/...)")
+
     args = parser.parse_args()
+
+    if args.update:
+        # Avoid doubling ".../Update/Update"
+        if normpath(args.base_dir).endswith(normpath("Update")):
+            base_dir_effective = args.base_dir
+        else:
+            base_dir_effective = join(args.base_dir, "Update")
+
+        # Only rewrite gb_matrix if the user did NOT override it
+        default_gb = normpath("tmp/GenBank-matrix/gB_matrix_raw.tsv")
+        if normpath(args.gb_matrix) == default_gb:
+            args.gb_matrix = join(base_dir_effective, "GenBank-matrix", "gB_matrix_raw.tsv")
+
+        args.base_dir = base_dir_effective
 
     validator = ValidateMatrix(
         args.url, args.taxa_path, args.base_dir, args.output_dir,
@@ -398,4 +422,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

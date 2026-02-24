@@ -3,9 +3,18 @@ import sys
 import pandas as pd
 from Bio import SeqIO
 from os.path import join
+from os.path import join, normpath
 from argparse import ArgumentParser
 from GffToDictionary import GffDictionary
 from CalcGenomeCords import CalculateGenomeCoordinates 
+
+'''
+Normal mode:
+	python scripts/CalcAlignmentCord.py
+	
+Update mode: 
+	python scripts/CalcAlignmentCord.py --paded_alignment tmp/Update/Pad-alignment/ --master_accession NC_001542 --blast_uniq_hits tmp/Update/Blast/query_uniq_tophits.tsv --master_gff ./../../rabv-vgtk/V-gTK/tmp/Gff/NC_001542.gff3 --update 
+'''
 
 class CalculateAlignmentCoordinates:
 
@@ -213,7 +222,22 @@ if __name__ == "__main__":
 	parser.add_argument('-m', '--master_accession', help='Master accession', required=True)
 	parser.add_argument('-bh', '--blast_uniq_hits', help='Blast unique hits file', default='tmp/Blast/query_uniq_tophits.tsv')
 	parser.add_argument('-g', '--master_gff', help='Master GFF3 file(s)', required=True, nargs='+')
+	parser.add_argument(
+    	"--update",
+    	action="store_true",
+    	help="If enabled, write all outputs under <tmp_dir>/Update (e.g., tmp/Update/...)"
+	)
 	args = parser.parse_args()
+	# --- update mode: move everything under <tmp_dir>/Update ---
+	if args.update:
+		# tmp_dir -> tmp_dir/Update (avoid Update/Update)
+		if not normpath(args.tmp_dir).endswith(normpath("Update")):
+			args.tmp_dir = join(args.tmp_dir, "Update")
+
+		# Rewrite defaults only (do not override user-provided custom paths)
+		if normpath(args.blast_uniq_hits) == normpath("tmp/Blast/query_uniq_tophits.tsv"):
+			args.blast_uniq_hits = join(args.tmp_dir, "Blast", "query_uniq_tophits.tsv")
+	# ---------------------------------------------------------
 
 	processor = CalculateAlignmentCoordinates(args.paded_alignment, args.master_gff, args.tmp_dir, args.output_dir, args.output_file, args.master_accession, args.blast_uniq_hits)
 	try:

@@ -3,9 +3,16 @@ import shutil
 import argparse
 import re
 import pandas as pd
-from os.path import join
 from Bio import SeqIO
 from Bio.Seq import Seq
+from os.path import join, normpath
+
+'''
+Normal mode:
+	python scripts/PadAlignment.py 
+Update mode:
+	python scripts/PadAlignment.py --reference_alignment ./../../dev_version-jun-09/TING/alUnc509RefseqsMafftHandModified.fa --input_dir tmp/Update/Nextalign/query_aln/ --master_acc NC_001542 --update
+'''
 
 class PadAlignment:
 	def __init__(self, reference_alignment, input_dir, base_dir, output_dir, keep_intermediate_files, new_outputfile=False):
@@ -288,8 +295,24 @@ if __name__ == "__main__":
 	parser.add_argument("-m", "--master_acc", help="Path to ref_list file (TSV with columns: accession, type, segment) OR comma-separated master accession IDs. For segmented viruses, the script extracts all 'master' entries to process each segment separately.")
 	parser.add_argument("-nd", "--nextalign_dir", help="Path to Nextalign output directory containing reference_aln/ and query_aln/ subdirectories.")
 	parser.add_argument("--precomputed_ref_dir", default=None, help="Optional directory containing precomputed segment alignments (e.g. refset_<segment>_aln.fasta). If absent or unmatched, falls back to nextalign reference_aln outputs.")
- 
+	parser.add_argument(
+    	"--update",
+    	action="store_true",
+    	help="If enabled, write all outputs under <base_dir>/Update (e.g., tmp/Update/...)"
+	)
+	
 	args = parser.parse_args()
+
+	# --- update mode: move everything under <base_dir>/Update ---
+	if args.update:
+		if not normpath(args.base_dir).endswith(normpath("Update")):
+			args.base_dir = join(args.base_dir, "Update")
+
+		if normpath(args.input_dir) == normpath("tmp/Nextalign/query_aln"):
+			args.input_dir = join(args.base_dir, "Nextalign", "query_aln")
+		# -----------------------------------------------------------
+
+	
 
 	processor = PadAlignment(args.reference_alignment, args.input_dir, args.base_dir, args.output_dir, args.keep_intermediate_files, args.new_outputfile)
 
