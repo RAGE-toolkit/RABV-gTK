@@ -18,18 +18,18 @@ ref_list="${generic_dir}/ref_list_based_on_blast.txt"
 
 # steps to run, O to skip any step
 run_genbank_fetcher=0
-run_genbank_parser=1
-run_download_gff=1
-run_curator=1
-run_validate_matrix=1
-run_filter_extract=1
-run_blast_alignment=1
-run_nextalign=1
-run_pad_alignment=1
-run_calc_alignment_cord=1
-run_software_version=1
-run_generate_tables=1
-run_host_taxa=1
+run_genbank_parser=0
+run_download_gff=0
+run_curator=0
+run_validate_matrix=0
+run_filter_extract=0
+run_blast_alignment=0
+run_nextalign=0
+run_pad_alignment=0
+run_calc_alignment_cord=0
+run_software_version=0
+run_generate_tables=0
+run_host_taxa=0
 run_clade_assignment=1
 run_create_db=1
 
@@ -300,7 +300,7 @@ if [ "$run_nextalign" -eq 1 ]; then
     python "${scripts_dir}/NextalignAlignment.py" "${na_args[@]}"
   else
     # Normal mode (as you specified)
-    python "${scripts_dir}/NextalignAlignment.py"
+    python "${scripts_dir}/NextalignAlignment.py" --master_ref "$master_acc"
   fi
 
   if [ $? -ne 0 ]; then
@@ -318,7 +318,7 @@ fi
 # ----- PadAlignment (normal vs update mode) -----
 
 if [ "$run_pad_alignment" -eq 1 ]; then
-  pad_reference_alignment="generic/rabv/alUnc509RefseqsMafftHandModified.fa"
+  pad_reference_alignment="generic/rabv/reference_alignment/alUnc509RefseqsMafftHandModified.fa"
   pad_input_dir="tmp/Update/Nextalign/query_aln/"
   pad_master_acc="$master_acc"
 
@@ -334,7 +334,7 @@ if [ "$run_pad_alignment" -eq 1 ]; then
     python "${scripts_dir}/PadAlignment.py" "${pad_args[@]}"
   else
     # Normal mode (as you specified)
-    python "${scripts_dir}/PadAlignment.py"
+    python "${scripts_dir}/PadAlignment.py" --reference_alignment "${pad_reference_alignment}" --master_acc "${master_acc}"
   fi
 
   if [ $? -ne 0 ]; then
@@ -368,7 +368,7 @@ if [ "$run_calc_alignment_cord" -eq 1 ]; then
       python "${scripts_dir}/CalcAlignmentCord.py" "${calc_args[@]}"
     else
       # Normal mode (your current existing command)
-      python "${scripts_dir}/CalcAlignmentCord-method2.py" -i "tmp/Pad-alignment/" -m "$master_acc" -g "tmp/Gff/NC_001542.gff3"
+      python "${scripts_dir}/CalcAlignmentCord.py" -i "tmp/Pad-alignment/" -m "$master_acc" -g "tmp/Gff/NC_001542.gff3"
     fi
 
     if [ $? -ne 0 ]; then
@@ -467,39 +467,45 @@ fi
 
 # ----- CladeAssignment.py (normal vs update mode) -----
 if [ "$run_clade_assignment" -eq 1 ]; then
-    ca_ref_aln="generic/rabv/tree/ref_plus_am3ca_am5.fa"
-    ca_ref_tree="generic/rabv/tree/ref_tree_am3c_am5.treefile"
+  ca_ref_aln="generic/rabv/tree/ref_plus_am3ca_am5.fa"
+  ca_ref_tree="generic/rabv/tree/ref_tree_am3c_am5.treefile"
+  ca_taxon_major="generic/rabv/reference_clades/ref_major_clades.tsv"
+  ca_taxon_minor="generic/rabv/reference_clades/ref_minor_clades.tsv"
+  ca_threads=6
+
+  # normal vs update inputs
+  if [ "$is_update" -eq 1 ]; then
     ca_query="tmp/Update/Pad-alignment/alUnc509RefseqsMafftHandModified.fa"
-    ca_aligned_out="tmp/Update/Pad-alignment/alUnc509RefseqsMafftHandModified.fa"
-    ca_taxon_major="generic/rabv/ref_major_clades.tsv"
-    ca_taxon_minor="generic/rabv/ref_minor_clades.tsv"
     ca_meta_data="tmp/Update/GenBank-matrix/gB_matrix_raw.tsv"
-    ca_threads=6
+  else
+    ca_query="tmp/Pad-alignment/alUnc509RefseqsMafftHandModified.fa"
+    ca_meta_data="tmp/GenBank-matrix/gB_matrix_raw.tsv"
+  fi
 
-    ca_args=(
-      "--ref-aln"     "$ca_ref_aln"
-      "--ref-tree"    "$ca_ref_tree"
-      "--query"       "$ca_query"
-      "--aligned-out" "$ca_aligned_out"
-      "--taxon-major" "$ca_taxon_major"
-      "--taxon-minor" "$ca_taxon_minor"
-      "--threads"     "$ca_threads"
-      "--meta-data"   "$ca_meta_data"
-      "--steps"       "all"
-      "--skip-mafft"
-    )
+  ca_args=(
+    "--ref-aln"     "$ca_ref_aln"
+    "--ref-tree"    "$ca_ref_tree"
+    "--query"       "$ca_query"
+    "--taxon-major" "$ca_taxon_major"
+    "--taxon-minor" "$ca_taxon_minor"
+    "--threads"     "$ca_threads"
+    "--meta-data"   "$ca_meta_data"
+    "--steps"       "all"
+    "--skip-mafft"
+  )
 
-    if [ "$is_update" -eq 1 ]; then
-      ca_args+=( "--update" )
-    fi
+  # update flag only in update mode
+  if [ "$is_update" -eq 1 ]; then
+    ca_args+=( "--update" )
+  fi
 
-    python "${scripts_dir}/CladeAssignment.py" "${ca_args[@]}"
-    if [ $? -ne 0 ]; then
-      echo "Error: CladeAssignment.py failed."
-      exit 1
-    fi
-    echo "CladeAssignment.py completed successfully."
-    echo ""
+  python "scripts/CladeAssignment.py" "${ca_args[@]}"
+  if [ $? -ne 0 ]; then
+    echo "Error: CladeAssignment.py failed."
+    exit 1
+  fi
+  echo "CladeAssignment.py completed successfully."
+  echo ""
 else
   echo "Skipping CladeAssignment.py"
   echo ""
