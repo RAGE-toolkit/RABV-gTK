@@ -11,8 +11,7 @@ from argparse import ArgumentParser
 Normal mode: 
 	python scripts/GenBankFetcher.py --taxid 11292 
 Update mode:
-	python scripts/GenBankFetcher.py --taxid 11292 --update --db rabv-gDB_Dec022025.db
-'''
+python scripts/GenBankFetcher.py --taxid 11292 --update --db rabv-gDB_Dec022025.db --tmp_dir tmp/Update --base_dir GenBank-XML'''
 try:
 	import requests
 except ModuleNotFoundError:
