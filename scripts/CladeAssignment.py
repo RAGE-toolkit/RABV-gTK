@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Normla mode:
-    python scripts/CladeAssignment.py   --ref-aln generic/rabv/tree/ref_plus_am3ca_am5.fa   --ref-tree generic/rabv/tree/ref_tree_am3c_am5.treefile   --query tmp/Update/Pad-alignment/alUnc509RefseqsMafftHandModified.fa   --aligned-out tmp/Update/Pad-alignment/alUnc509RefseqsMafftHandModified.fa   --taxon-major generic/rabv/ref_major_clades.tsv   --taxon-minor generic/rabv/ref_minor_clades.tsv   --threads 6   --meta-data tmp/Update/GenBank-matrix/gB_matrix_raw.tsv   --steps all   --skip-mafft
+    python scripts/CladeAssignment.py   --ref-aln generic/rabv/tree/ref_plus_am3ca_am5.fa   --ref-tree generic/rabv/tree/ref_tree_am3c_am5.treefile   --query tmp/Pad-alignment/alUnc509RefseqsMafftHandModified.fa   --taxon-major generic/rabv/ref_major_clades.tsv   --taxon-minor generic/rabv/ref_minor_clades.tsv   --threads 6   --meta-data tmp/GenBank-matrix/gB_matrix_raw.tsv   --steps all   --skip-mafft
 
 Update mode:
     python scripts/CladeAssignment.py   --ref-aln generic/rabv/tree/ref_plus_am3ca_am5.fa   --ref-tree generic/rabv/tree/ref_tree_am3c_am5.treefile   --query tmp/Update/Pad-alignment/alUnc509RefseqsMafftHandModified.fa   --aligned-out tmp/Update/Pad-alignment/alUnc509RefseqsMafftHandModified.fa   --taxon-major generic/rabv/ref_major_clades.tsv   --taxon-minor generic/rabv/ref_minor_clades.tsv   --threads 6   --meta-data tmp/Update/GenBank-matrix/gB_matrix_raw.tsv   --steps all   --skip-mafft --update
@@ -29,7 +29,6 @@ class CladeAssignment:
         steps="all",
         threads=6,
         dry_run=False,
-        update=False,
         # executables
         mafft_exe="mafft",
         epa_exe="epa-ng",
@@ -69,7 +68,6 @@ class CladeAssignment:
         self.taxon_minor = taxon_minor
 
         # flags
-        self.update = update
         self.skip_mafft = skip_mafft
         # dirs
         self.base_dir = base_dir
@@ -118,8 +116,7 @@ class CladeAssignment:
         #outdir_rel = join(self.base_dir, "update", self.output_dir) if self.update else join(self.base_dir, self.output_dir)
         #self.outdir = os.path.abspath(outdir_rel)
 
-        update_dirname = "Update"  # use "update" instead if you prefer lowercase everywhere
-        outdir_rel = join(self.base_dir, update_dirname, self.output_dir) if self.update else join(self.base_dir, self.output_dir)
+        outdir_rel = join(self.base_dir, self.output_dir)
         self.outdir = os.path.abspath(outdir_rel)
 
         # derived outputs (inside outdir by default)
@@ -138,29 +135,11 @@ class CladeAssignment:
         self.major_per_query = os.path.abspath(join(self.gappa_major_outdir, "per_query.tsv"))
         self.minor_per_query = os.path.abspath(join(self.gappa_minor_outdir, "per_query.tsv"))
 
-        # matrix output:
-        # - if user gave --out-matrix, respect it
-        # - else:
-        #     update mode  -> write into update outdir
-        #     normal mode  -> overwrite input meta_data (your original behavior)
-        # Always overwrite input meta_data unless user explicitly gives --out-matrix
-        #if out_matrix.strip():
-        #    self.out_matrix = os.path.abspath(out_matrix.strip())
-        #else:
-        #    self.out_matrix = os.path.abspath(self.meta_data)
 
         if out_matrix.strip():
             self.out_matrix = os.path.abspath(out_matrix.strip())
         else:
-            if self.update:
-                self.out_matrix = os.path.abspath(join(self.outdir, "gB_matrix_with_EPA.tsv"))
-            else:
-                self.out_matrix = os.path.abspath(self.meta_data)
-
-        #if out_matrix.strip():
-        #    self.out_matrix = os.path.abspath(out_matrix.strip())
-        #else:
-        #    self.out_matrix = os.path.abspath(join(self.outdir, "gB_matrix_with_EPA.tsv") if self.update else self.meta_data)
+            self.out_matrix = os.path.abspath(self.meta_data)
 
     def _die(self, msg):
         print("[error]", msg, file=sys.stderr)
@@ -396,7 +375,7 @@ class CladeAssignment:
     # Orchestrate
     # ----------------------
     def run_all(self):
-        print(f"[mode] update={self.update} -> outputs under: {self.outdir}", file=sys.stderr)
+        print(f"[outdir] {self.outdir}", file=sys.stderr)
 
         '''
         if self.steps in ("all", "mafft"):
@@ -460,13 +439,6 @@ def build_arg_parser():
     p.add_argument("--dry-run", action="store_true", help="Print commands only")
     p.add_argument("--threads", type=int, default=6, help="Threads for MAFFT and EPA-ng")
 
-    # UPDATE MODE
-    p.add_argument(
-        "--update",
-        action="store_true",
-        help="When enabled, write ALL outputs under <base-dir>/update/<output-dir>/",
-    )
-
     # tools
     p.add_argument("--mafft-exe", default="mafft", help="MAFFT executable")
     p.add_argument("--epa-exe", default="epa-ng", help="EPA-ng executable")
@@ -475,7 +447,7 @@ def build_arg_parser():
     # MAFFT options
     p.add_argument("--mafft-anysymbol", action="store_true", default=True, help="Use --anysymbol")
     p.add_argument("--mafft-extra", default="", help="Extra MAFFT args (space-separated)")
-    p.add_argument("--aligned-out", default="", help="Override MAFFT output FASTA path")
+    #p.add_argument("--aligned-out", default="", help="Override MAFFT output FASTA path")
 
     # EPA-ng options
     p.add_argument("--epa-model", default="TVM+F+R5", help="EPA-ng model (-m)")
@@ -534,7 +506,6 @@ def main():
         steps=args.steps,
         threads=args.threads,
         dry_run=args.dry_run,
-        update=args.update,
         mafft_exe=args.mafft_exe,
         epa_exe=args.epa_exe,
         gappa_exe=args.gappa_exe,

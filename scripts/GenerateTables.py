@@ -233,7 +233,7 @@ class GenerateTables:
 					accessions[acc] = 1
 
 					ins_val = insertion_map.get(acc, "")  # NEW
-
+					
 					if acc in blast_dict:
 						write_file.write(acc + '\t' + blast_dict[acc] + '\t' + rows[1] + '\t' + ins_val + '\n')
 					else:
@@ -303,33 +303,8 @@ if __name__ == "__main__":
 	parser.add_argument('-p', '--paded_aln', help='Paded alignment file', nargs='+', default=["tmp/Pad-alignment/NC_001542.aligned_merged_MSA.fasta"])
 	parser.add_argument('-n', '--nextalign_dir', help='Nextalign aligned directory', default="tmp/Nextalign/")
 	parser.add_argument('-e', '--email', help='Email id', default='your-email@example.com')
-	parser.add_argument(
-		"--update",
-		action="store_true",
-		help="If enabled, write all outputs under <base_dir>/Update (e.g., tmp/Update/...)"
-	)
+
 	args = parser.parse_args()
-	# --- update mode: move everything under <base_dir>/Update ---
-	if args.update:
-		# base_dir -> base_dir/Update (avoid Update/Update)
-		if not normpath(args.base_dir).endswith(normpath("Update")):
-			args.base_dir = join(args.base_dir, "Update")
-
-		# Rewrite defaults only (do not override user-provided custom paths)
-		if normpath(args.genbank_matrix) == normpath("tmp/GenBank-matrix/gB_matrix_raw.tsv"):
-			args.genbank_matrix = join(args.base_dir, "GenBank-matrix", "gB_matrix_raw.tsv")
-
-		if normpath(args.blast_hits) == normpath("tmp/Blast/query_uniq_tophits.tsv"):
-			args.blast_hits = join(args.base_dir, "Blast", "query_uniq_tophits.tsv")
-
-		# paded_aln is a list; rewrite only if it matches the default list exactly
-		default_paded = [normpath("tmp/Pad-alignment/NC_001542.aligned_merged_MSA.fasta")]
-		if [normpath(x) for x in (args.paded_aln or [])] == default_paded:
-			args.paded_aln = [join(args.base_dir, "Pad-alignment", "NC_001542.aligned_merged_MSA.fasta")]
-
-		if normpath(args.nextalign_dir) == normpath("tmp/Nextalign/"):
-			args.nextalign_dir = join(args.base_dir, "Nextalign")
-	# -----------------------------------------------------------
 	
 	processor = GenerateTables(args.genbank_matrix, args.base_dir, args.output_dir, args.blast_hits, args.paded_aln, args.nextalign_dir, args.email)
 	processor.process()

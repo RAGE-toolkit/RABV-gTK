@@ -58,17 +58,15 @@ class GenBankFetcher:
 		#os.makedirs(join(self.output_dir, self.base_dir), exist_ok=True)
 
 	def _init_update_mode_output(self, db_path):
-		
+		# Update mode should only validate db_path; output_dir remains user-chosen (via --tmp_dir)
 		if not db_path:
-			raise ValueError("Update mode active but no SQLite DB path provided (use --db or --update).")
+			raise ValueError("Update mode active but no SQLite DB path provided (use --db).")
 
 		db_path = os.path.abspath(db_path)
 		if not os.path.exists(db_path):
 			raise FileNotFoundError(f"SQLite DB not found: {db_path}")
 
-		update_root = join(self.output_dir, "Update")
-		self.output_dir = update_root
-
+		# Ensure output directories exist but do NOT force an Update subdirectory
 		os.makedirs(self.output_dir, exist_ok=True)
 		os.makedirs(join(self.output_dir, self.base_dir), exist_ok=True)
 
@@ -265,7 +263,7 @@ class GenBankFetcher:
 		os.makedirs(self.output_dir, exist_ok=True)
 		os.makedirs(join(self.output_dir, self.base_dir), exist_ok=True)
 
-		# If update mode is enabled, tag the batch name
+		# If update mode is enabled, tag the batch nameyt
 		tag = "-update" if self.update_file else ""
 
 		base_filename = join(self.output_dir, self.base_dir, f"batch{tag}-{batch_size}")
