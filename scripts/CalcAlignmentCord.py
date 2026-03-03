@@ -32,6 +32,21 @@ class CalculateAlignmentCoordinates:
 		else:
 			return [x.strip() for x in self.master_accession.split(',') if x.strip()]
 
+
+	def write_row(self, out_f, record_id, current_master, ref_acc, genome_cord_start, genome_cord_end,
+              cds_start="NA", cds_end="NA", product="NA"):
+		data = [
+			record_id,
+			current_master,
+			ref_acc,
+			str(genome_cord_start),
+			str(genome_cord_end),
+			str(cds_start),
+			str(cds_end),
+			str(product),
+		]
+		out_f.write("\t".join(data) + "\n")
+
 	def get_gff_for_master(self, master):
 		# Find GFF file in self.master_gff that matches master
 		# self.master_gff is a list of files
@@ -92,7 +107,6 @@ class CalculateAlignmentCoordinates:
 			if [adj_start, adj_end] not in adjusted_coords and adj_start != adj_end:
 				adjusted_coords.append([adj_start, adj_end])
 		return adjusted_coords
-
 
 	def get_products_for_range(self, gff_cds_list, coord_range):
 		query_start, query_end = int(coord_range[0]), int(coord_range[1])
@@ -187,6 +201,7 @@ class CalculateAlignmentCoordinates:
 					adjusted = self.recalculate_cds_coordinates(record.id, gaps, cds_list, start_offset)
 
 					#print(f">{record.id}", adjusted)
+					'''
 					for each_cords in adjusted:
 						product = self.get_products_for_range(cds_list, each_cords)
 						if record.id in genome_coords:
@@ -203,7 +218,45 @@ class CalculateAlignmentCoordinates:
 							else:
 								data = [record.id, current_master, current_master, str(genome_cord_start), str(genome_cord_end), str(each_cords[0]), str(each_cords[1]), overlap_product['product']]
 								out_f.write('\t'.join(data))	
-								out_f.write("\n")				
+								out_f.write("\n")		
+
+					'''		
+					# Resolve aln coords once
+					if record.id in genome_coords:
+						master_acc, genome_cord_start, genome_cord_end = genome_coords[record.id]
+					else:
+						genome_cord_start, genome_cord_end = "NA", "NA"
+
+					# Resolve reference accession once
+					ref_acc = blast_dict.get(record.id, current_master)
+
+					# If adjusted itself is empty, still write aln_start/aln_end only
+					if not adjusted:
+						self.write_row(out_f, record.id, current_master, ref_acc, genome_cord_start, genome_cord_end)
+						continue
+
+					for each_cords in adjusted:
+						product_hits = self.get_products_for_range(cds_list, each_cords)
+
+						# If CDS/product is missing for this range: write aln coords only
+						if not product_hits:
+							self.write_row(out_f, record.id, current_master, ref_acc, genome_cord_start, genome_cord_end)
+							continue
+
+						# Normal case: write full rows (one per overlapping product segment)
+						for overlap_product in product_hits:
+							self.write_row(
+								out_f,
+								record.id,
+								current_master,
+								ref_acc,
+								genome_cord_start,
+								genome_cord_end,
+								cds_start=each_cords[0],
+								cds_end=each_cords[1],
+								product=overlap_product.get('product', 'NA')
+							)
+							
 if __name__ == "__main__":
 	parser = ArgumentParser(description='Calculates the genome and cds coordinates for a given sequences')
 	parser.add_argument('-i', '--paded_alignment', help='Sequence file directory, it can be single or multiple fasta sequence files.', required=True)
