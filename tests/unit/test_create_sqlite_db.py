@@ -24,7 +24,6 @@ def test_create_sqlite_db_exclusions_clusters_and_trees(tmp_path: Path):
     m49_region = tmp_path / "m49_region.csv"
     m49_sub = tmp_path / "m49_sub.csv"
     proj = tmp_path / "software.tsv"
-    insertions = tmp_path / "insertions.tsv"
     host_taxa = tmp_path / "host.tsv"
     fasta = tmp_path / "seqs.fa"
     cluster_tsv = tmp_path / "clusters.tsv"
@@ -49,7 +48,6 @@ def test_create_sqlite_db_exclusions_clusters_and_trees(tmp_path: Path):
     write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
     write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
     write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
-    write_tsv(insertions, [["A", "none"]], ["primary_accession", "insertions"])
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
 
     fasta.write_text(">A\nATGC\n>B\nATGA\n", encoding="utf-8")
@@ -69,7 +67,6 @@ def test_create_sqlite_db_exclusions_clusters_and_trees(tmp_path: Path):
         m49_sub_regions=str(m49_sub),
         proj_settings=str(proj),
         fasta_sequence_file=str(fasta),
-        insertions=str(insertions),
         host_taxa_file=str(host_taxa),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
@@ -123,7 +120,6 @@ def test_create_sqlite_db_uses_filtered_details_reason(tmp_path: Path):
     m49_region = tmp_path / "m49_region.csv"
     m49_sub = tmp_path / "m49_sub.csv"
     proj = tmp_path / "software.tsv"
-    insertions = tmp_path / "insertions.tsv"
     host_taxa = tmp_path / "host.tsv"
     fasta = tmp_path / "seqs.fa"
     filtered_ids = tmp_path / "filtered_ids.txt"
@@ -138,7 +134,6 @@ def test_create_sqlite_db_uses_filtered_details_reason(tmp_path: Path):
     write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
     write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
     write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
-    write_tsv(insertions, [["A", "none"]], ["primary_accession", "insertions"])
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
     fasta.write_text(">A\nATGC\n>B\nATGA\n", encoding="utf-8")
 
@@ -160,7 +155,6 @@ def test_create_sqlite_db_uses_filtered_details_reason(tmp_path: Path):
         m49_sub_regions=str(m49_sub),
         proj_settings=str(proj),
         fasta_sequence_file=str(fasta),
-        insertions=str(insertions),
         host_taxa_file=str(host_taxa),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
@@ -195,7 +189,6 @@ def test_create_sqlite_db_maps_tree_manifest_segment_from_refset_key(tmp_path: P
     m49_region = tmp_path / "m49_region.csv"
     m49_sub = tmp_path / "m49_sub.csv"
     proj = tmp_path / "software.tsv"
-    insertions = tmp_path / "insertions.tsv"
     host_taxa = tmp_path / "host.tsv"
     fasta = tmp_path / "seqs.fa"
     tree_manifest = tmp_path / "tree_manifest.tsv"
@@ -210,7 +203,6 @@ def test_create_sqlite_db_maps_tree_manifest_segment_from_refset_key(tmp_path: P
     write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
     write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
     write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
-    write_tsv(insertions, [["A", "none"]], ["primary_accession", "insertions"])
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
     fasta.write_text(">A\nATGC\n", encoding="utf-8")
 
@@ -232,7 +224,6 @@ def test_create_sqlite_db_maps_tree_manifest_segment_from_refset_key(tmp_path: P
         m49_sub_regions=str(m49_sub),
         proj_settings=str(proj),
         fasta_sequence_file=str(fasta),
-        insertions=str(insertions),
         host_taxa_file=str(host_taxa),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
@@ -260,7 +251,6 @@ def test_create_sqlite_db_raises_when_meta_file_missing(tmp_path: Path):
     m49_region = tmp_path / "m49_region.csv"
     m49_sub = tmp_path / "m49_sub.csv"
     proj = tmp_path / "software.tsv"
-    insertions = tmp_path / "insertions.tsv"
     host_taxa = tmp_path / "host.tsv"
     fasta = tmp_path / "seqs.fa"
 
@@ -272,7 +262,6 @@ def test_create_sqlite_db_raises_when_meta_file_missing(tmp_path: Path):
     write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
     write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
     write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
-    write_tsv(insertions, [["A", "none"]], ["primary_accession", "insertions"])
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
     fasta.write_text(">A\nATGC\n", encoding="utf-8")
 
@@ -287,7 +276,6 @@ def test_create_sqlite_db_raises_when_meta_file_missing(tmp_path: Path):
         m49_sub_regions=str(m49_sub),
         proj_settings=str(proj),
         fasta_sequence_file=str(fasta),
-        insertions=str(insertions),
         host_taxa_file=str(host_taxa),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
@@ -312,7 +300,6 @@ def test_create_sqlite_db_raises_when_alignment_missing_primary_accession(tmp_pa
     m49_region = tmp_path / "m49_region.csv"
     m49_sub = tmp_path / "m49_sub.csv"
     proj = tmp_path / "software.tsv"
-    insertions = tmp_path / "insertions.tsv"
     host_taxa = tmp_path / "host.tsv"
     fasta = tmp_path / "seqs.fa"
 
@@ -325,7 +312,6 @@ def test_create_sqlite_db_raises_when_alignment_missing_primary_accession(tmp_pa
     write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
     write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
     write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
-    write_tsv(insertions, [["A", "none"]], ["primary_accession", "insertions"])
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
     fasta.write_text(">A\nATGC\n", encoding="utf-8")
 
@@ -340,7 +326,6 @@ def test_create_sqlite_db_raises_when_alignment_missing_primary_accession(tmp_pa
         m49_sub_regions=str(m49_sub),
         proj_settings=str(proj),
         fasta_sequence_file=str(fasta),
-        insertions=str(insertions),
         host_taxa_file=str(host_taxa),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",

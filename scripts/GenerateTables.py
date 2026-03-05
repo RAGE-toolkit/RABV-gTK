@@ -270,28 +270,12 @@ class GenerateTables:
 			outfile.writelines(lines_to_write)
 		print(f"Redundancy removed. File updated: {file_path}")
 
-	def create_insertion_table(self):
-		write_file = open(join(self.base_dir, self.output_dir, "insertions.tsv"), 'w')
-		header = ["primary_accession", "reference", "insertion"]
-		write_file.write("\t".join(header) + "\n")
-		for aln_dir in os.listdir(self.nextalign_dir):
-			for each_aln_dir in os.listdir(join(self.nextalign_dir, aln_dir)):
-				with open(join(self.nextalign_dir, aln_dir, each_aln_dir, each_aln_dir + ".insertions.csv")) as f:
-					for each_line in islice(f, 1, None):
-						accession, insertion, aa_insertion = each_line.strip().split(",")
-						if len(insertion) > 0:
-							data = [accession, each_aln_dir, insertion]
-							write_file.write("\t".join(data) + "\n")
-
-		write_file.close()
-					
 	def process(self):
 		
 		blast_dictionary = self.load_blast_hits(self.blast_hits)
 		#self.load_gb_matrix()
 		self.created_alignment_table(blast_dictionary)
 		#self.host_table()
-		#self.create_insertion_table()
 
 if __name__ == "__main__":
 	parser = ArgumentParser(description='Generating tables sqlite DB')

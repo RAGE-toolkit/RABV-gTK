@@ -95,7 +95,6 @@ required_tables = [
     "sequences",
     "sequence_alignment",
     "features",
-    "insertions",
     "host_taxa",
     "trees",
 ]

@@ -281,7 +281,6 @@ class CreateSqliteDB:
 		self._require_file(self.m49_sub_regions, "m49_sub_regions")
 		self._require_file(self.proj_settings, "proj_settings")
 		self._require_file(self.fasta_sequence_file, "fasta_sequences")
-		#self._require_file(self.insertions, "insertions")
 		self._require_file(self.host_taxa_file, "host_taxa_file")
 		self._require_file(self.host_lineage_file, "host_lineage_file")
 		self._require_file(self.host_children_file, "host_children_file")
@@ -352,7 +351,6 @@ class CreateSqliteDB:
 		df_m49_region = self._read_csv_required(join(self.m49_regions), [], "m49_regions")
 		df_m49_sub_region = self._read_csv_required(join(self.m49_sub_regions), [], "m49_sub_regions")
 		df_proj_setting = self._read_tsv_required(join(self.proj_settings), [], "proj_settings")
-		#df_insertions = self._ensure_primary_accession(df_insertions, "insertions", aliases=["accession", "sequence_id"])
 		df_host_taxa = self._read_tsv_required(join(self.host_taxa_file), [], "host_taxa_file", dtype=str)
 		df_host_lineage = self._read_tsv_required(join(self.host_lineage_file), [], "host_lineage_file", dtype=str)
 		df_host_children = self._read_tsv_required(join(self.host_children_file), [], "host_children_file", dtype=str)
@@ -371,7 +369,6 @@ class CreateSqliteDB:
 		df_m49_sub_region.to_sql("m49_sub_regions", conn, if_exists="replace", index=False)
 		df_proj_setting.to_sql("project_settings", conn, if_exists="replace", index=False)
 		df_fasta_sequences.to_sql("sequences", conn, if_exists="replace", index=False)
-		#df_insertions.to_sql("insertions", conn, if_exists="replace", index=False)
 		df_host_taxa.to_sql("host_taxa", conn, if_exists="replace", index=False)
 		df_host_lineage.to_sql("host_lineage", conn, if_exists="replace", index=False)
 		df_host_children.to_sql("host_children", conn, if_exists="replace", index=False)
@@ -406,7 +403,6 @@ class CreateSqliteDB:
 		cursor.execute("""CREATE TABLE IF NOT EXISTS m49_sub_regions AS SELECT * FROM m49_sub_regions;""")
 		cursor.execute("""CREATE TABLE IF NOT EXISTS project_settings AS SELECT * FROM project_settings;""")
 		cursor.execute("""CREATE TABLE IF NOT EXISTS sequences AS SELECT * FROM sequences;""")
-		#cursor.execute("""CREATE TABLE IF NOT EXISTS insertions AS SELECT * FROM insertions;""")
 		cursor.execute("""CREATE TABLE IF NOT EXISTS host_taxa AS SELECT * FROM host_taxa;""")
 		cursor.execute("""CREATE TABLE IF NOT EXISTS excluded_accessions AS SELECT * FROM excluded_accessions;""")
 
@@ -486,7 +482,6 @@ class CreateSqliteDB:
 		conn.close()
 
 def process(args):
-	#args.insertion_file, after fasta_sequences,
 	db_creator = CreateSqliteDB(
 			args.meta_data,
 			args.features,
@@ -533,7 +528,6 @@ if __name__ == "__main__":
 	parser.add_argument('-msr', '--m49_sub_regions', help='M49 sub-regions', default="assets/m49_sub_region.csv")
 	parser.add_argument('-s', '--proj_settings', help='Project settings', default="tmp/Software_info/software_info.tsv")
 	parser.add_argument('-fa', '--fasta_sequences', help='Fasta sequences', default="tmp/GenBank-matrix/sequences.fa")
-	#parser.add_argument('-i', '--insertion_file', help='Nextalign insertion file', default="tmp/Tables/insertions.tsv")
 	parser.add_argument('-d', '--db_name', help='Name of the Sqlite database', default="gdb")
 	parser.add_argument('-ds', '--db_status', help='Database status: "new db" (default) or "last modified"/"last updated". Determines info.creation_type.',default="new db")
 	parser.add_argument('-t', '--tree_file', help='VeryFastTree Newick file', default=None)

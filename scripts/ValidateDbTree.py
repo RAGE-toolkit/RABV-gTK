@@ -273,7 +273,7 @@ def main():
 
             # Table-level coverage summary
             report.write("\nTable-level accession coverage:\n")
-            for table_name in ["meta_data", "sequences", "sequence_alignment", "features", "insertions", "host_taxa"]:
+            for table_name in ["meta_data", "sequences", "sequence_alignment", "features", "host_taxa"]:
                 cols = get_table_columns(conn, table_name)
                 acc_cols = [c for c in cols if c in ACCESSION_COLUMNS]
                 if not acc_cols:

@@ -724,7 +724,6 @@ process GENERATE_TABLES {
         path nextalign_dir
     output:
         path "Tables/sequence_alignment.tsv", emit: sequence_alignment
-        path "Tables/insertions.tsv", emit: insertions
         path "Tables/host_taxa.tsv", emit: host_taxa
         path "Tables", emit: tables_dir
     shell:
@@ -741,7 +740,6 @@ process CREATE_SQLITE_DB {
         path meta_data
         path features
         path sequence_alignment
-        path insertions
         path host_taxa
         path software_info
         path fasta_sequences
@@ -814,7 +812,7 @@ process CREATE_SQLITE_DB {
 
     python !{scripts_dir}/CreateSqliteDB.py -m !{meta_data} \
     -rf !{features} -p !{sequence_alignment} \
-    -i !{insertions} -ht !{host_taxa} \
+    -ht !{host_taxa} \
     -s !{software_info} -fa !{fasta_sequences} \
     -g !{params.gene_info} \
     -mc !{projectDir}/assets/m49_country.csv \
@@ -1153,7 +1151,6 @@ workflow {
     CREATE_SQLITE_DB(data, 
                      CALC_ALIGNMENT_CORD.out.features, 
                      GENERATE_TABLES.out.sequence_alignment, 
-                     GENERATE_TABLES.out.insertions, 
                      GENERATE_TABLES.out.host_taxa, 
                      SOFTWARE_VERSION.out.software_info, 
                      GENBANK_PARSER.out.sequences_out,
