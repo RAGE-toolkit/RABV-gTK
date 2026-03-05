@@ -27,6 +27,7 @@ def test_create_sqlite_db_exclusions_clusters_and_trees(tmp_path: Path):
     host_taxa = tmp_path / "host.tsv"
     host_lineage = tmp_path / "host_lineage.tsv"
     host_children = tmp_path / "host_children.tsv"
+    host_lineage_lookup = tmp_path / "host_lineage_lookup.tsv"
     fasta = tmp_path / "seqs.fa"
     cluster_tsv = tmp_path / "clusters.tsv"
     filtered_ids = tmp_path / "filtered_ids.txt"
@@ -42,9 +43,13 @@ def test_create_sqlite_db_exclusions_clusters_and_trees(tmp_path: Path):
         ],
         ["primary_accession", "exclusion"],
     )
-    write_tsv(features, [["A", "P"]], ["primary_accession", "feature"])
+    write_tsv(
+        features,
+        [["A", "REF1", "1", "10", "1", "10", "P"]],
+        ["accession", "reference_accession", "aln_start", "aln_end", "cds_start", "cds_end", "product"],
+    )
     write_tsv(aln, [["A", "ATGC"]], ["primary_accession", "aligned_seq"])
-    write_tsv(gene, [["geneA", "Gene A"]], ["name", "description"])
+    write_tsv(gene, [["A", "coding", "1", "10", "geneA"]], ["accession", "category", "start", "end", "gene_name"])
     write_csv(m49_country, [["001", "World"]], ["m49_code", "name"])
     write_csv(m49_inter, [["X", "Inter"]], ["code", "name"])
     write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
@@ -53,6 +58,7 @@ def test_create_sqlite_db_exclusions_clusters_and_trees(tmp_path: Path):
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
     write_tsv(host_lineage, [["A", "lineage1"]], ["primary_accession", "lineage"])
     write_tsv(host_children, [["A", "child1"]], ["primary_accession", "child"])
+    write_tsv(host_lineage_lookup, [["A", "host1"]], ["primary_accession", "scientific_name"])
 
     fasta.write_text(">A\nATGC\n>B\nATGA\n", encoding="utf-8")
     cluster_tsv.write_text("REP_A\tA\nREP_B\tB\n", encoding="utf-8")
@@ -74,6 +80,7 @@ def test_create_sqlite_db_exclusions_clusters_and_trees(tmp_path: Path):
         host_taxa_file=str(host_taxa),
         host_lineage_file=str(host_lineage),
         host_children_file=str(host_children),
+        host_lineage_lookup_file=str(host_lineage_lookup),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
         db_name="testdb",
@@ -129,14 +136,19 @@ def test_create_sqlite_db_uses_filtered_details_reason(tmp_path: Path):
     host_taxa = tmp_path / "host.tsv"
     host_lineage = tmp_path / "host_lineage.tsv"
     host_children = tmp_path / "host_children.tsv"
+    host_lineage_lookup = tmp_path / "host_lineage_lookup.tsv"
     fasta = tmp_path / "seqs.fa"
     filtered_ids = tmp_path / "filtered_ids.txt"
     filtered_details = tmp_path / "filtered_sequences.tsv"
 
     write_tsv(meta, [["A", ""], ["B", ""]], ["primary_accession", "exclusion"])
-    write_tsv(features, [["A", "P"]], ["primary_accession", "feature"])
+    write_tsv(
+        features,
+        [["A", "REF1", "1", "10", "1", "10", "P"]],
+        ["accession", "reference_accession", "aln_start", "aln_end", "cds_start", "cds_end", "product"],
+    )
     write_tsv(aln, [["A", "ATGC"]], ["primary_accession", "aligned_seq"])
-    write_tsv(gene, [["geneA", "Gene A"]], ["name", "description"])
+    write_tsv(gene, [["A", "coding", "1", "10", "geneA"]], ["accession", "category", "start", "end", "gene_name"])
     write_csv(m49_country, [["001", "World"]], ["m49_code", "name"])
     write_csv(m49_inter, [["X", "Inter"]], ["code", "name"])
     write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
@@ -145,6 +157,7 @@ def test_create_sqlite_db_uses_filtered_details_reason(tmp_path: Path):
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
     write_tsv(host_lineage, [["A", "lineage1"]], ["primary_accession", "lineage"])
     write_tsv(host_children, [["A", "child1"]], ["primary_accession", "child"])
+    write_tsv(host_lineage_lookup, [["A", "host1"]], ["primary_accession", "scientific_name"])
     fasta.write_text(">A\nATGC\n>B\nATGA\n", encoding="utf-8")
 
     filtered_ids.write_text("B\n", encoding="utf-8")
@@ -168,6 +181,7 @@ def test_create_sqlite_db_uses_filtered_details_reason(tmp_path: Path):
         host_taxa_file=str(host_taxa),
         host_lineage_file=str(host_lineage),
         host_children_file=str(host_children),
+        host_lineage_lookup_file=str(host_lineage_lookup),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
         db_name="testdb2",
@@ -204,14 +218,19 @@ def test_create_sqlite_db_maps_tree_manifest_segment_from_refset_key(tmp_path: P
     host_taxa = tmp_path / "host.tsv"
     host_lineage = tmp_path / "host_lineage.tsv"
     host_children = tmp_path / "host_children.tsv"
+    host_lineage_lookup = tmp_path / "host_lineage_lookup.tsv"
     fasta = tmp_path / "seqs.fa"
     tree_manifest = tmp_path / "tree_manifest.tsv"
     seg_tree = tmp_path / "seg1.treefile"
 
     write_tsv(meta, [["A", "", "1"]], ["primary_accession", "exclusion", "segment"])
-    write_tsv(features, [["A", "P"]], ["primary_accession", "feature"])
+    write_tsv(
+        features,
+        [["A", "REF1", "1", "10", "1", "10", "P"]],
+        ["accession", "reference_accession", "aln_start", "aln_end", "cds_start", "cds_end", "product"],
+    )
     write_tsv(aln, [["A", "ATGC"]], ["primary_accession", "aligned_seq"])
-    write_tsv(gene, [["geneA", "Gene A"]], ["name", "description"])
+    write_tsv(gene, [["A", "coding", "1", "10", "geneA"]], ["accession", "category", "start", "end", "gene_name"])
     write_csv(m49_country, [["001", "World"]], ["m49_code", "name"])
     write_csv(m49_inter, [["X", "Inter"]], ["code", "name"])
     write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
@@ -220,6 +239,7 @@ def test_create_sqlite_db_maps_tree_manifest_segment_from_refset_key(tmp_path: P
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
     write_tsv(host_lineage, [["A", "lineage1"]], ["primary_accession", "lineage"])
     write_tsv(host_children, [["A", "child1"]], ["primary_accession", "child"])
+    write_tsv(host_lineage_lookup, [["A", "host1"]], ["primary_accession", "scientific_name"])
     fasta.write_text(">A\nATGC\n", encoding="utf-8")
 
     seg_tree.write_text("(A:0.1);\n", encoding="utf-8")
@@ -243,6 +263,7 @@ def test_create_sqlite_db_maps_tree_manifest_segment_from_refset_key(tmp_path: P
         host_taxa_file=str(host_taxa),
         host_lineage_file=str(host_lineage),
         host_children_file=str(host_children),
+        host_lineage_lookup_file=str(host_lineage_lookup),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
         db_name="testdb_manifest_segment",
@@ -272,11 +293,16 @@ def test_create_sqlite_db_raises_when_meta_file_missing(tmp_path: Path):
     host_taxa = tmp_path / "host.tsv"
     host_lineage = tmp_path / "host_lineage.tsv"
     host_children = tmp_path / "host_children.tsv"
+    host_lineage_lookup = tmp_path / "host_lineage_lookup.tsv"
     fasta = tmp_path / "seqs.fa"
 
-    write_tsv(features, [["A", "P"]], ["primary_accession", "feature"])
+    write_tsv(
+        features,
+        [["A", "REF1", "1", "10", "1", "10", "P"]],
+        ["accession", "reference_accession", "aln_start", "aln_end", "cds_start", "cds_end", "product"],
+    )
     write_tsv(aln, [["A", "ATGC"]], ["primary_accession", "aligned_seq"])
-    write_tsv(gene, [["geneA", "Gene A"]], ["name", "description"])
+    write_tsv(gene, [["A", "coding", "1", "10", "geneA"]], ["accession", "category", "start", "end", "gene_name"])
     write_csv(m49_country, [["001", "World"]], ["m49_code", "name"])
     write_csv(m49_inter, [["X", "Inter"]], ["code", "name"])
     write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
@@ -285,6 +311,7 @@ def test_create_sqlite_db_raises_when_meta_file_missing(tmp_path: Path):
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
     write_tsv(host_lineage, [["A", "lineage1"]], ["primary_accession", "lineage"])
     write_tsv(host_children, [["A", "child1"]], ["primary_accession", "child"])
+    write_tsv(host_lineage_lookup, [["A", "host1"]], ["primary_accession", "scientific_name"])
     fasta.write_text(">A\nATGC\n", encoding="utf-8")
 
     db = CreateSqliteDB(
@@ -301,6 +328,7 @@ def test_create_sqlite_db_raises_when_meta_file_missing(tmp_path: Path):
         host_taxa_file=str(host_taxa),
         host_lineage_file=str(host_lineage),
         host_children_file=str(host_children),
+        host_lineage_lookup_file=str(host_lineage_lookup),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
         db_name="bad",
@@ -327,12 +355,17 @@ def test_create_sqlite_db_raises_when_alignment_missing_primary_accession(tmp_pa
     host_taxa = tmp_path / "host.tsv"
     host_lineage = tmp_path / "host_lineage.tsv"
     host_children = tmp_path / "host_children.tsv"
+    host_lineage_lookup = tmp_path / "host_lineage_lookup.tsv"
     fasta = tmp_path / "seqs.fa"
 
     write_tsv(meta, [["A", ""]], ["primary_accession", "exclusion"])
-    write_tsv(features, [["A", "P"]], ["primary_accession", "feature"])
+    write_tsv(
+        features,
+        [["A", "REF1", "1", "10", "1", "10", "P"]],
+        ["accession", "reference_accession", "aln_start", "aln_end", "cds_start", "cds_end", "product"],
+    )
     write_tsv(aln, [["ATGC"]], ["aligned_seq"])
-    write_tsv(gene, [["geneA", "Gene A"]], ["name", "description"])
+    write_tsv(gene, [["A", "coding", "1", "10", "geneA"]], ["accession", "category", "start", "end", "gene_name"])
     write_csv(m49_country, [["001", "World"]], ["m49_code", "name"])
     write_csv(m49_inter, [["X", "Inter"]], ["code", "name"])
     write_csv(m49_region, [["Y", "Region"]], ["code", "name"])
@@ -341,6 +374,7 @@ def test_create_sqlite_db_raises_when_alignment_missing_primary_accession(tmp_pa
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
     write_tsv(host_lineage, [["A", "lineage1"]], ["primary_accession", "lineage"])
     write_tsv(host_children, [["A", "child1"]], ["primary_accession", "child"])
+    write_tsv(host_lineage_lookup, [["A", "host1"]], ["primary_accession", "scientific_name"])
     fasta.write_text(">A\nATGC\n", encoding="utf-8")
 
     db = CreateSqliteDB(
@@ -357,6 +391,7 @@ def test_create_sqlite_db_raises_when_alignment_missing_primary_accession(tmp_pa
         host_taxa_file=str(host_taxa),
         host_lineage_file=str(host_lineage),
         host_children_file=str(host_children),
+        host_lineage_lookup_file=str(host_lineage_lookup),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
         db_name="bad2",

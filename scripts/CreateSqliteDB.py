@@ -955,31 +955,20 @@ if __name__ == "__main__":
     parser.add_argument("-ct", "--cluster_tsv", help="MMseqs clustering TSV (rep\\tmember)", default=None)
     parser.add_argument("-ci", "--cluster_min_seq_id", help="MMseqs min sequence identity used for clustering", default=None)
     parser.add_argument("-fi", "--filtered_ids", help="File with filtered sequence IDs (one per line) to exclude from DB", default=None)
-    parser.add_argument(
-        "-fd",
-        "--filtered_details",
+    parser.add_argument("-fd", "--filtered_details",
         help="TSV with filtered sequence details (seq_name, reference, error, warnings)",
-        default=None,
-    )
-    parser.add_argument(
-        "--update",
-        action="store_true",
-        help="If enabled, merge tables into the existing DB (append-only, non-redundant).",
-    )
-    parser.add_argument(
-        "--tree_dir",
+        default=None,)
+    parser.add_argument("--update", action="store_true",
+        help="If enabled, merge tables into the existing DB (append-only, non-redundant).",    )
+    parser.add_argument("--tree_dir",
         help="Directory containing tree files and a manifest meta_data.tsv (chromosome, segment_number, tree_type, tree_name, tree_model).",
-        default=None,
-    )
+        default=None,    )
+    
     parser.add_argument("-ht", "--host_taxa_file", help="Host Taxanomy file", default="tmp/HostTaxa/Host_taxa.tsv")
     parser.add_argument("-hl", "--host_lineage_file", help="Host Lineage file", default="tmp/HostTaxa/Host_taxa_lineage.tsv")
     parser.add_argument("-hc", "--host_children_file", help="Host Children file", default="tmp/HostTaxa/Host_taxa_children.tsv")
-    parser.add_argument(
-        "-hll",
-        "--host_lineage_lookup_file",
-        help="Host Lineage lookup file",
-        default="tmp/HostTaxa/Host_taxa_lineage_lookup.tsv",
-    )
+    parser.add_argument("-hll", "--host_lineage_lookup_file", help="Host Lineage lookup file",
+        		default="tmp/HostTaxa/Host_taxa_lineage_lookup.tsv",)
 
     args = parser.parse_args()
 
