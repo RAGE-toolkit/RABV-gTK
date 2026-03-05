@@ -25,6 +25,8 @@ def test_create_sqlite_db_exclusions_clusters_and_trees(tmp_path: Path):
     m49_sub = tmp_path / "m49_sub.csv"
     proj = tmp_path / "software.tsv"
     host_taxa = tmp_path / "host.tsv"
+    host_lineage = tmp_path / "host_lineage.tsv"
+    host_children = tmp_path / "host_children.tsv"
     fasta = tmp_path / "seqs.fa"
     cluster_tsv = tmp_path / "clusters.tsv"
     filtered_ids = tmp_path / "filtered_ids.txt"
@@ -49,6 +51,8 @@ def test_create_sqlite_db_exclusions_clusters_and_trees(tmp_path: Path):
     write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
     write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
+    write_tsv(host_lineage, [["A", "lineage1"]], ["primary_accession", "lineage"])
+    write_tsv(host_children, [["A", "child1"]], ["primary_accession", "child"])
 
     fasta.write_text(">A\nATGC\n>B\nATGA\n", encoding="utf-8")
     cluster_tsv.write_text("REP_A\tA\nREP_B\tB\n", encoding="utf-8")
@@ -68,6 +72,8 @@ def test_create_sqlite_db_exclusions_clusters_and_trees(tmp_path: Path):
         proj_settings=str(proj),
         fasta_sequence_file=str(fasta),
         host_taxa_file=str(host_taxa),
+        host_lineage_file=str(host_lineage),
+        host_children_file=str(host_children),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
         db_name="testdb",
@@ -121,6 +127,8 @@ def test_create_sqlite_db_uses_filtered_details_reason(tmp_path: Path):
     m49_sub = tmp_path / "m49_sub.csv"
     proj = tmp_path / "software.tsv"
     host_taxa = tmp_path / "host.tsv"
+    host_lineage = tmp_path / "host_lineage.tsv"
+    host_children = tmp_path / "host_children.tsv"
     fasta = tmp_path / "seqs.fa"
     filtered_ids = tmp_path / "filtered_ids.txt"
     filtered_details = tmp_path / "filtered_sequences.tsv"
@@ -135,6 +143,8 @@ def test_create_sqlite_db_uses_filtered_details_reason(tmp_path: Path):
     write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
     write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
+    write_tsv(host_lineage, [["A", "lineage1"]], ["primary_accession", "lineage"])
+    write_tsv(host_children, [["A", "child1"]], ["primary_accession", "child"])
     fasta.write_text(">A\nATGC\n>B\nATGA\n", encoding="utf-8")
 
     filtered_ids.write_text("B\n", encoding="utf-8")
@@ -156,6 +166,8 @@ def test_create_sqlite_db_uses_filtered_details_reason(tmp_path: Path):
         proj_settings=str(proj),
         fasta_sequence_file=str(fasta),
         host_taxa_file=str(host_taxa),
+        host_lineage_file=str(host_lineage),
+        host_children_file=str(host_children),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
         db_name="testdb2",
@@ -190,6 +202,8 @@ def test_create_sqlite_db_maps_tree_manifest_segment_from_refset_key(tmp_path: P
     m49_sub = tmp_path / "m49_sub.csv"
     proj = tmp_path / "software.tsv"
     host_taxa = tmp_path / "host.tsv"
+    host_lineage = tmp_path / "host_lineage.tsv"
+    host_children = tmp_path / "host_children.tsv"
     fasta = tmp_path / "seqs.fa"
     tree_manifest = tmp_path / "tree_manifest.tsv"
     seg_tree = tmp_path / "seg1.treefile"
@@ -204,6 +218,8 @@ def test_create_sqlite_db_maps_tree_manifest_segment_from_refset_key(tmp_path: P
     write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
     write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
+    write_tsv(host_lineage, [["A", "lineage1"]], ["primary_accession", "lineage"])
+    write_tsv(host_children, [["A", "child1"]], ["primary_accession", "child"])
     fasta.write_text(">A\nATGC\n", encoding="utf-8")
 
     seg_tree.write_text("(A:0.1);\n", encoding="utf-8")
@@ -225,6 +241,8 @@ def test_create_sqlite_db_maps_tree_manifest_segment_from_refset_key(tmp_path: P
         proj_settings=str(proj),
         fasta_sequence_file=str(fasta),
         host_taxa_file=str(host_taxa),
+        host_lineage_file=str(host_lineage),
+        host_children_file=str(host_children),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
         db_name="testdb_manifest_segment",
@@ -252,6 +270,8 @@ def test_create_sqlite_db_raises_when_meta_file_missing(tmp_path: Path):
     m49_sub = tmp_path / "m49_sub.csv"
     proj = tmp_path / "software.tsv"
     host_taxa = tmp_path / "host.tsv"
+    host_lineage = tmp_path / "host_lineage.tsv"
+    host_children = tmp_path / "host_children.tsv"
     fasta = tmp_path / "seqs.fa"
 
     write_tsv(features, [["A", "P"]], ["primary_accession", "feature"])
@@ -263,6 +283,8 @@ def test_create_sqlite_db_raises_when_meta_file_missing(tmp_path: Path):
     write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
     write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
+    write_tsv(host_lineage, [["A", "lineage1"]], ["primary_accession", "lineage"])
+    write_tsv(host_children, [["A", "child1"]], ["primary_accession", "child"])
     fasta.write_text(">A\nATGC\n", encoding="utf-8")
 
     db = CreateSqliteDB(
@@ -277,6 +299,8 @@ def test_create_sqlite_db_raises_when_meta_file_missing(tmp_path: Path):
         proj_settings=str(proj),
         fasta_sequence_file=str(fasta),
         host_taxa_file=str(host_taxa),
+        host_lineage_file=str(host_lineage),
+        host_children_file=str(host_children),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
         db_name="bad",
@@ -301,6 +325,8 @@ def test_create_sqlite_db_raises_when_alignment_missing_primary_accession(tmp_pa
     m49_sub = tmp_path / "m49_sub.csv"
     proj = tmp_path / "software.tsv"
     host_taxa = tmp_path / "host.tsv"
+    host_lineage = tmp_path / "host_lineage.tsv"
+    host_children = tmp_path / "host_children.tsv"
     fasta = tmp_path / "seqs.fa"
 
     write_tsv(meta, [["A", ""]], ["primary_accession", "exclusion"])
@@ -313,6 +339,8 @@ def test_create_sqlite_db_raises_when_alignment_missing_primary_accession(tmp_pa
     write_csv(m49_sub, [["Z", "SubRegion"]], ["code", "name"])
     write_tsv(proj, [["Python", "3.11"]], ["Software", "Version"])
     write_tsv(host_taxa, [["A", "host1"]], ["primary_accession", "host"])
+    write_tsv(host_lineage, [["A", "lineage1"]], ["primary_accession", "lineage"])
+    write_tsv(host_children, [["A", "child1"]], ["primary_accession", "child"])
     fasta.write_text(">A\nATGC\n", encoding="utf-8")
 
     db = CreateSqliteDB(
@@ -327,6 +355,8 @@ def test_create_sqlite_db_raises_when_alignment_missing_primary_accession(tmp_pa
         proj_settings=str(proj),
         fasta_sequence_file=str(fasta),
         host_taxa_file=str(host_taxa),
+        host_lineage_file=str(host_lineage),
+        host_children_file=str(host_children),
         base_dir=str(tmp_path),
         output_dir="SqliteDB",
         db_name="bad2",
