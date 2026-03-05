@@ -3,18 +3,9 @@ import sys
 import pandas as pd
 from Bio import SeqIO
 from os.path import join
-from os.path import join, normpath
 from argparse import ArgumentParser
 from GffToDictionary import GffDictionary
 from CalcGenomeCords import CalculateGenomeCoordinates 
-
-'''
-Normal mode:
-	python scripts/CalcAlignmentCord.py
-	
-Update mode: 
-	python scripts/CalcAlignmentCord.py --paded_alignment tmp/Update/Pad-alignment/ --master_accession NC_001542 --blast_uniq_hits tmp/Update/Blast/query_uniq_tophits.tsv --master_gff ./../../rabv-vgtk/V-gTK/tmp/Gff/NC_001542.gff3 --update 
-'''
 
 class CalculateAlignmentCoordinates:
 
@@ -40,6 +31,21 @@ class CalculateAlignmentCoordinates:
 				return []
 		else:
 			return [x.strip() for x in self.master_accession.split(',') if x.strip()]
+
+
+	def write_row(self, out_f, record_id, current_master, ref_acc, genome_cord_start, genome_cord_end,
+              cds_start="NA", cds_end="NA", product="NA"):
+		data = [
+			record_id,
+			current_master,
+			ref_acc,
+			str(genome_cord_start),
+			str(genome_cord_end),
+			str(cds_start),
+			str(cds_end),
+			str(product),
+		]
+		out_f.write("\t".join(data) + "\n")
 
 	def get_gff_for_master(self, master):
 		# Find GFF file in self.master_gff that matches master
@@ -101,7 +107,6 @@ class CalculateAlignmentCoordinates:
 			if [adj_start, adj_end] not in adjusted_coords and adj_start != adj_end:
 				adjusted_coords.append([adj_start, adj_end])
 		return adjusted_coords
-
 
 	def get_products_for_range(self, gff_cds_list, coord_range):
 		query_start, query_end = int(coord_range[0]), int(coord_range[1])
@@ -196,6 +201,7 @@ class CalculateAlignmentCoordinates:
 					adjusted = self.recalculate_cds_coordinates(record.id, gaps, cds_list, start_offset)
 
 					#print(f">{record.id}", adjusted)
+					'''
 					for each_cords in adjusted:
 						product = self.get_products_for_range(cds_list, each_cords)
 						if record.id in genome_coords:
@@ -212,32 +218,55 @@ class CalculateAlignmentCoordinates:
 							else:
 								data = [record.id, current_master, current_master, str(genome_cord_start), str(genome_cord_end), str(each_cords[0]), str(each_cords[1]), overlap_product['product']]
 								out_f.write('\t'.join(data))	
-								out_f.write("\n")				
+								out_f.write("\n")		
+
+					'''		
+					# Resolve aln coords once
+					if record.id in genome_coords:
+						master_acc, genome_cord_start, genome_cord_end = genome_coords[record.id]
+					else:
+						genome_cord_start, genome_cord_end = "NA", "NA"
+
+					# Resolve reference accession once
+					ref_acc = blast_dict.get(record.id, current_master)
+
+					# If adjusted itself is empty, still write aln_start/aln_end only
+					if not adjusted:
+						self.write_row(out_f, record.id, current_master, ref_acc, genome_cord_start, genome_cord_end)
+						continue
+
+					for each_cords in adjusted:
+						product_hits = self.get_products_for_range(cds_list, each_cords)
+
+						# If CDS/product is missing for this range: write aln coords only
+						if not product_hits:
+							self.write_row(out_f, record.id, current_master, ref_acc, genome_cord_start, genome_cord_end)
+							continue
+
+						# Normal case: write full rows (one per overlapping product segment)
+						for overlap_product in product_hits:
+							self.write_row(
+								out_f,
+								record.id,
+								current_master,
+								ref_acc,
+								genome_cord_start,
+								genome_cord_end,
+								cds_start=each_cords[0],
+								cds_end=each_cords[1],
+								product=overlap_product.get('product', 'NA')
+							)
+							
 if __name__ == "__main__":
 	parser = ArgumentParser(description='Calculates the genome and cds coordinates for a given sequences')
-	parser.add_argument('-i', '--paded_alignment', help='Sequence file directory, it can be single or multiple fasta sequencce files.', required=True)
+	parser.add_argument('-i', '--paded_alignment', help='Sequence file directory, it can be single or multiple fasta sequence files.', required=True)
 	parser.add_argument('-b', '--tmp_dir', help='Base directory', default="tmp")
 	parser.add_argument('-d', '--output_dir', help='Output directory where processed data and results are stored', default='Tables')
 	parser.add_argument('-o', '--output_file', help='Output file name', default='features.tsv')
 	parser.add_argument('-m', '--master_accession', help='Master accession', required=True)
 	parser.add_argument('-bh', '--blast_uniq_hits', help='Blast unique hits file', default='tmp/Blast/query_uniq_tophits.tsv')
 	parser.add_argument('-g', '--master_gff', help='Master GFF3 file(s)', required=True, nargs='+')
-	parser.add_argument(
-    	"--update",
-    	action="store_true",
-    	help="If enabled, write all outputs under <tmp_dir>/Update (e.g., tmp/Update/...)"
-	)
 	args = parser.parse_args()
-	# --- update mode: move everything under <tmp_dir>/Update ---
-	if args.update:
-		# tmp_dir -> tmp_dir/Update (avoid Update/Update)
-		if not normpath(args.tmp_dir).endswith(normpath("Update")):
-			args.tmp_dir = join(args.tmp_dir, "Update")
-
-		# Rewrite defaults only (do not override user-provided custom paths)
-		if normpath(args.blast_uniq_hits) == normpath("tmp/Blast/query_uniq_tophits.tsv"):
-			args.blast_uniq_hits = join(args.tmp_dir, "Blast", "query_uniq_tophits.tsv")
-	# ---------------------------------------------------------
 
 	processor = CalculateAlignmentCoordinates(args.paded_alignment, args.master_gff, args.tmp_dir, args.output_dir, args.output_file, args.master_accession, args.blast_uniq_hits)
 	try:
@@ -249,3 +278,94 @@ if __name__ == "__main__":
 # Example usage:
 #find_gaps_in_fasta("NC_001542.aligned_merged_MSA.fasta", "NC_001542.gff3")
 
+# paded vs padded typo
+# -----------------------------------------------------------------------------
+# UPDATE-MODE PLAN (COMMENT ONLY)
+# Goal: keep coordinate/features consistency when updating an existing DB with
+# partial/new sequences, without reprocessing all historic data.
+#
+# 1) Source-of-truth tables to read from existing DB before processing updates:
+#    - sequence_alignment: existing aligned sequence strings and current column
+#      layout/backbone (critical for preserving historical insertion columns).
+#    - features: existing CDS/product coordinate rows to preserve unchanged
+#      accessions and to support merge/upsert logic.
+#    - meta_data: existing accession set, accession_type (master/reference/query),
+#      segment labels, and any exclusion flags for update filtering.
+#    - sequences: existing raw sequences; used to identify true novel accessions
+#      vs already-seen entries and support idempotent updates.
+#    - insertions: existing insertion annotations to avoid losing historic calls
+#      and to append only newly detected insertion events.
+#    - genes + project_settings: stable annotation context and settings to keep
+#      coordinate interpretation consistent across update cycles.
+#
+# 2) Define deterministic update scope:
+#    - Build accession sets: existing DB accessions vs incoming run accessions.
+#    - Classify incoming as: new, changed (if replacement allowed), unchanged.
+#    - Restrict coordinate recalculation in this script to update-scope accessions
+#      (new/changed only), while leaving unchanged rows untouched.
+#    - Segment-aware scope partitioning is mandatory:
+#      * Build update scope independently per segment.
+#      * Never compare/accession-diff across different segments.
+#      * Keep unsegmented viruses in a single implicit segment bucket.
+#
+# 3) Alignment backbone preservation (upstream dependency for this script):
+#    - Pad/alignment step must include existing DB alignment backbone so prior
+#      insertion columns are retained.
+#    - If novel insertions appear in incoming data, extend backbone columns in a
+#      controlled way, then project all update-scope sequences to that backbone.
+#    - Do NOT compress/drop historical insertion-only columns during update mode.
+#    - Segment handling:
+#      * Maintain one backbone per segment (segment 1 backbone, segment 2
+#        backbone, etc.).
+#      * Never project segment N sequences onto segment M backbone.
+#      * For missing/unknown segment labels in update input, fail fast or route
+#        to explicit quarantine/exclusion (no silent reassignment).
+#
+# 4) Coordinate generation rules in CalcAlignmentCord:
+#    - Generate output rows only for update-scope accessions.
+#    - Keep master/reference mapping deterministic (BLAST hit fallback to master).
+#    - Preserve product labeling semantics from master GFF used in prior builds.
+#    - Validate that aln_start/aln_end and cds_start/cds_end are non-degenerate
+#      and segment-consistent before writing update rows.
+#    - Segment-specific annotation mapping:
+#      * Resolve master+GFF by segment first, then by accession naming.
+#      * If multiple masters exist, select only the master assigned to the
+#        sequence segment.
+#      * Reject feature writes when sequence segment and GFF/master segment do
+#        not match.
+#
+# 5) DB merge/upsert strategy (outside this script, in DB writer):
+#    - features: UPSERT by stable key (e.g., accession + cds_start + cds_end +
+#      product, or a canonical hash key) to avoid duplicates.
+#    - sequence_alignment: UPSERT by accession (replace aligned sequence only for
+#      update-scope accessions).
+#    - sequences + meta_data + insertions: append/upsert for update-scope rows.
+#    - Never use full-table replace in update mode for the core dynamic tables.
+#    - Segment-safe keys/constraints:
+#      * Include segment in natural keys where accessions may repeat across
+#        segments/sources.
+#      * Enforce (primary_accession, segment) uniqueness semantics where
+#        applicable.
+#
+# 6) Safety checks required for “flawless” updates:
+#    - Idempotency: rerunning the same update does not duplicate rows.
+#    - Referential integrity: every updated feature row has a matching accession
+#      in sequences/meta_data.
+#    - Count checks: expected delta counts for new/updated accessions match run
+#      summary.
+#    - Segment checks: no cross-segment contamination in updated features.
+#    - Segment completeness checks:
+#      * Expected segments in run manifest are all processed.
+#      * No segment receives rows belonging to another segment.
+#      * Per-segment row deltas reconcile with per-segment update scope counts.
+#
+# 7) Operational sequencing for update pipeline:
+#    - Read DB tables -> compute update scope -> run padded alignment with DB
+#      backbone -> run CalcAlignmentCord for update-scope accessions -> upsert
+#      into DB tables -> run integrity/idempotency validations.
+#
+# 8) Recommended rollback/audit support:
+#    - Record update batch ID + timestamp in an audit table.
+#    - Store pre/post row counts for features/sequence_alignment/sequences.
+#    - Keep a manifest of updated accessions for traceability.
+# -----------------------------------------------------------------------------

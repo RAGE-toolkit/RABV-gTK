@@ -4,15 +4,13 @@ import os
 import csv
 import sys
 import shutil
-import read_file
 import subprocess
 import numpy as np
 import pandas as pd
 from Bio import SeqIO
 from os.path import join
 from argparse import ArgumentParser
-from os.path import join, normpath
-
+import read_file
 
 class BlastAlignment:
 	def __init__(self, query_fasta, db_fasta, base_dir, output_dir, output_file, is_segmented_virus, master_acc, is_update, keep_blast_tmp_dir, gb_matrix, segment_file=None):
@@ -318,7 +316,6 @@ class BlastAlignment:
 			else:
 				grouped_dict[ref_acc].append(query_acc)
 
-		#print('\n'.join(grouped_dict.keys()))
 		seq_dicts = {}
 		query_seqs = read_file.fasta(join(sorted_all, "query_seq.fa"))
 		for rows in query_seqs:
@@ -696,27 +693,7 @@ if __name__ == "__main__":
 	parser.add_argument('-u', '--is_update', help='If you have new downloaded sequence to blast then use this option, it will avoid performing blast on existing sequences', default='N')
 	parser.add_argument('-k', '--keep_blast_tmp_dir', help='Retains the blast temp directory for debug purpose', default='N')
 	parser.add_argument('-g', '--gb_matrix', help='GenBank matrix file', default='tmp/GenBank-matrix/gB_matrix_raw.tsv')
-	parser.add_argument(
-    	'--update',
-    	action='store_true',
-    	help="If enabled, write all outputs under <base_dir>/Update (e.g., tmp/Update/...)"
-	)
 	args = parser.parse_args()
-
-	if args.update:
-		# base_dir -> base_dir/Update (avoid Update/Update)
-		if not normpath(args.base_dir).endswith(normpath("Update")):
-			args.base_dir = join(args.base_dir, "Update")
-
-		# Only rewrite defaults (do NOT override user-provided custom paths)
-		if normpath(args.query_fa) == normpath("tmp/Sequences/query_seq.fa"):
-			args.query_fa = join(args.base_dir, "Sequences", "query_seq.fa")
-
-		if normpath(args.ref_fa) == normpath("tmp/Sequences/ref_seq.fa"):
-			args.ref_fa = join(args.base_dir, "Sequences", "ref_seq.fa")
-
-		if normpath(args.gb_matrix) == normpath("tmp/GenBank-matrix/gB_matrix_raw.tsv"):
-			args.gb_matrix = join(args.base_dir, "GenBank-matrix", "gB_matrix_raw.tsv")
 
 	processor = BlastAlignment(
 		args.query_fa,

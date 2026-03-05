@@ -3,16 +3,9 @@ import shutil
 import argparse
 import re
 import pandas as pd
+from os.path import join
 from Bio import SeqIO
 from Bio.Seq import Seq
-from os.path import join, normpath
-
-'''
-Normal mode:
-	python scripts/PadAlignment.py 
-Update mode:
-	python scripts/PadAlignment.py --reference_alignment ./../../dev_version-jun-09/TING/alUnc509RefseqsMafftHandModified.fa --input_dir tmp/Update/Nextalign/query_aln/ --master_acc NC_001542 --update
-'''
 
 class PadAlignment:
 	def __init__(self, reference_alignment, input_dir, base_dir, output_dir, keep_intermediate_files, new_outputfile=False):
@@ -151,6 +144,8 @@ class PadAlignment:
 					if seq_idx < len(sequence):
 						gapped_sequence.append(sequence[seq_idx])
 						seq_idx += 1
+					else:
+						gapped_sequence.append('-')
 			gapped_seq_str = ''.join(gapped_sequence)
 			seq_record.seq = Seq(gapped_seq_str)
 			updated_sequences.append(seq_record)
@@ -295,24 +290,8 @@ if __name__ == "__main__":
 	parser.add_argument("-m", "--master_acc", help="Path to ref_list file (TSV with columns: accession, type, segment) OR comma-separated master accession IDs. For segmented viruses, the script extracts all 'master' entries to process each segment separately.")
 	parser.add_argument("-nd", "--nextalign_dir", help="Path to Nextalign output directory containing reference_aln/ and query_aln/ subdirectories.")
 	parser.add_argument("--precomputed_ref_dir", default=None, help="Optional directory containing precomputed segment alignments (e.g. refset_<segment>_aln.fasta). If absent or unmatched, falls back to nextalign reference_aln outputs.")
-	parser.add_argument(
-    	"--update",
-    	action="store_true",
-    	help="If enabled, write all outputs under <base_dir>/Update (e.g., tmp/Update/...)"
-	)
-	
+ 
 	args = parser.parse_args()
-
-	# --- update mode: move everything under <base_dir>/Update ---
-	if args.update:
-		if not normpath(args.base_dir).endswith(normpath("Update")):
-			args.base_dir = join(args.base_dir, "Update")
-
-		if normpath(args.input_dir) == normpath("tmp/Nextalign/query_aln"):
-			args.input_dir = join(args.base_dir, "Nextalign", "query_aln")
-		# -----------------------------------------------------------
-
-	
 
 	processor = PadAlignment(args.reference_alignment, args.input_dir, args.base_dir, args.output_dir, args.keep_intermediate_files, args.new_outputfile)
 
@@ -337,4 +316,68 @@ if __name__ == "__main__":
 		print("Error: Either -r (reference alignment) or both -m (master acc) and -nd (nextalign dir) must be provided.")
 
 	processor.remove_redundant_sequences()
+
+# -----------------------------------------------------------------------------
+# UPDATE-MODE PLAN FOR PADALIGNMENT (COMMENT ONLY)
+# Goal: project incoming partial/new sequences onto an existing DB-consistent
+# alignment backbone, while preserving historical insertion structure.
+#
+# 1) Inputs required for robust update mode:
+#    - Existing DB-derived per-segment backbone alignments (or equivalent files
+#      exported from sequence_alignment) as primary projection targets.
+#    - Incoming nextalign query_aln outputs for newly fetched/changed accessions.
+#    - Master list + segment mapping from ref_list/metadata.
+#
+# 2) Segment-first processing contract:
+#    - Partition all operations by segment before padding.
+#    - Build one work unit per segment: {segment_key, masters, references,
+#      incoming query alignments, existing backbone alignment}.
+#    - Unsegmented viruses run as a single segment bucket.
+#    - Never allow cross-segment projection (segment N query -> segment M
+#      backbone is invalid and should be rejected).
+#
+# 3) Backbone selection order per segment:
+#    - Preferred: existing DB backbone for that segment (preserves historic
+#      insertion columns and coordinate compatibility).
+#    - Fallback 1: precomputed segment reference alignment
+#      (e.g., refset_<segment>_aln.fasta).
+#    - Fallback 2: nextalign reference_aln output.
+#    - If no segment-specific backbone exists, fail that segment explicitly
+#      (do not silently reuse another segment's backbone).
+#
+# 4) Gap projection behavior per segment:
+#    - For each reference subalignment in the segment, insert gaps according to
+#      the segment backbone reference alignment.
+#    - Preserve existing columns from historic backbone exactly.
+#    - If incoming data introduces genuinely novel insertion columns, append them
+#      in a deterministic segment-local manner (stable ordering), without
+#      removing historical columns.
+#
+# 5) Merging outputs:
+#    - Produce segment-scoped merged MSA outputs first.
+#    - Optional global merged output is a concatenation of segment outputs only
+#      when downstream expects a combined file; otherwise keep per-segment files
+#      as canonical update artifacts.
+#    - Keep mapping manifest: accession -> segment -> output file.
+#
+# 6) Orphans and unresolved references:
+#    - Keep current orphan detection, but report per segment.
+#    - Distinguish:
+#      * orphan due to missing reference in segment backbone
+#      * orphan due to unknown/missing segment assignment
+#    - Route unresolved records to exclusion/quarantine list for DB audit tables.
+#
+# 7) Idempotency and determinism requirements:
+#    - Rerunning same update batch with same inputs yields byte-stable segment
+#      outputs (or equivalent sequence+coordinate content).
+#    - Deduplication should be segment-aware if accession reuse across segments
+#      is possible (key by accession+segment where required).
+#
+# 8) Hand-off to CalcAlignmentCord and DB update:
+#    - Emit explicit segment metadata alongside padded outputs (filename
+#      convention or manifest TSV) so coordinate calculation selects the correct
+#      master GFF per segment.
+#    - Ensure only update-scope accessions are forwarded for feature recalculation
+#      and DB upsert.
+# -----------------------------------------------------------------------------
 

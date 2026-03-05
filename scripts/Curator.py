@@ -13,15 +13,14 @@ class BlastAlignment:
 
     def __init__(self, gb_matrix: str, curated_file: str,
              base_dir: str = "tmp", output_dir: str = "Curated",
-             output_file: str = "gB_matrix.tsv",
-             update: bool = False) -> None:
+             output_file: str = "gB_matrix.tsv",) -> None:
 
         self.gb_matrix = gb_matrix
         self.curated_file = curated_file
         self.base_dir = base_dir
         self.output_dir = output_dir
         self.output_file = output_file
-        self.update = update
+ 
 
     # ---------------------- Public API ----------------------
 
@@ -118,9 +117,10 @@ class BlastAlignment:
         self._write_tsv(out_path, gb_header, gb_rows)
         '''
         # Decide base output root
-        base_out = os.path.join(self.base_dir, "Update") if self.update else self.base_dir
+        #base_out = os.path.join(self.base_dir, "Update") if self.update else self.base_dir
 
-        out_dir = os.path.join(base_out, self.output_dir)
+        #out_dir = os.path.join(base_out, self.output_dir)
+        out_dir = os.path.join(self.base_dir, self.output_dir)
         os.makedirs(out_dir, exist_ok=True)
 
         # 1) Normal output file (unchanged naming/location pattern)
@@ -220,14 +220,13 @@ def _build_argparser() -> ArgumentParser:
     p.add_argument('-b', '--base_dir', help='Base directory for outputs', default='tmp')
     p.add_argument('-t', '--output_dir', help='Output subdirectory', default='Curated')
     p.add_argument('-o', '--output_file', help='Output filename (TSV)', default='gB_matrix_raw.tsv')
-    p.add_argument('--update', action='store_true',
-               help='Update mode: write outputs under tmp/Update and overwrite input gb_matrix')
+    
     return p
 
 def main() -> None:
     args = _build_argparser().parse_args()
     BlastAlignment(
-        args.gb_matrix, args.curated_file, args.base_dir, args.output_dir, args.output_file, update=args.update,
+        args.gb_matrix, args.curated_file, args.base_dir, args.output_dir, args.output_file,
     ).process()
 
 
