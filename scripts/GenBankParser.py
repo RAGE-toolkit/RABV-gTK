@@ -126,6 +126,25 @@ class GenBankParser:
 
 		print(f"[update] Loaded {len(existing)} existing/excluded accessions from {db_path}")
 		return existing
+	
+
+	def is_unverified_record(self, gbseq):
+		# Check definition
+		definition = gbseq.findtext('GBSeq_definition', default='') or ''
+		if 'UNVERIFIED' in definition.upper():
+			return True
+
+		# Check keywords
+		for kw in gbseq.findall('GBSeq_keywords/GBKeyword'):
+			if kw.text and 'UNVERIFIED' in kw.text.upper():
+				return True
+
+		# Check comment
+		comment = gbseq.findtext('GBSeq_comment', default='') or ''
+		if 'UNABLE TO VERIFY' in comment.upper() or 'UNVERIFIED' in comment.upper():
+			return True
+
+		return False
 
 	def xml_to_tsv(self, xml_file, ref_seq_dict: dict, exclusion_acc_list: list):
 		tree = ET.parse(xml_file)
@@ -146,9 +165,12 @@ class GenBankParser:
 			content['division'] = gbseq.find('GBSeq_division').text
 			content['update_date'] = gbseq.find('GBSeq_update-date').text
 			content['create_date'] = gbseq.find('GBSeq_create-date').text
-			content['definition'] = gbseq.find('GBSeq_definition').text
+			#content['definition'] = gbseq.find('GBSeq_definition').text
+			content['definition'] = gbseq.find('GBSeq_definition').text if gbseq.find('GBSeq_definition') is not None else ''
 			content['primary_accession'] = gbseq.find('GBSeq_primary-accession').text
 			content['accession_version'] = gbseq.find('GBSeq_accession-version').text
+
+			is_unverified = self.is_unverified_record(gbseq)
 
 			if self.update_mode and self._existing_accessions:
 				if content['primary_accession'] in self._existing_accessions:
@@ -167,6 +189,10 @@ class GenBankParser:
 			if content['primary_accession'] in exclusion_acc_list:
 				content['accession_type'] = 'excluded'
 				content['exclusion_criteria'] = 'excluded by the user'
+				content['exclusion_status'] = '1'
+			elif is_unverified:
+				content['accession_type'] = 'excluded'
+				content['exclusion_criteria'] = 'unverified sequence in XML'
 				content['exclusion_status'] = '1'
 			else:
 				content['exclusion_criteria'] = ''
