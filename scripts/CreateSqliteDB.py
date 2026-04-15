@@ -2,9 +2,10 @@
 import os
 import re
 import csv
-import time
-import sqlite3
 import sys
+import time
+import shutil
+import sqlite3
 import read_file
 import subprocess
 import pandas as pd
@@ -45,6 +46,7 @@ class CreateSqliteDB:
         host_lineage_file,
         host_children_file,
         host_lineage_lookup_file,
+        db_file=None,
         tree_file=None,
         iqtree_file=None,
         usher_tree=None,
@@ -68,6 +70,7 @@ class CreateSqliteDB:
         self.fasta_sequence_file = fasta_sequence_file
         self.base_dir = base_dir
         self.output_dir = output_dir
+        self.db_file = db_file
         self.db_name = db_name
         self.db_status = db_status
         self.tree_file = tree_file
@@ -84,6 +87,68 @@ class CreateSqliteDB:
         self.host_children_file = host_children_file
         self.host_lineage_lookup_file = host_lineage_lookup_file
         self.update = bool(update)
+
+
+    @staticmethod
+    def _timestamp_for_backup() -> str:
+        return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    def _backup_existing_db_if_update(self, db_path: str) -> str | None:
+
+        if not self.update:
+            return None
+
+        if not os.path.isfile(db_path):
+            print(f"[CreateSqliteDB] Update mode enabled but DB does not exist yet, so no backup created: {db_path}")
+            return None
+
+        db_dir = os.path.dirname(db_path)
+        db_file = os.path.basename(db_path)
+        db_stem, db_ext = os.path.splitext(db_file)
+        timestamp = self._timestamp_for_backup()
+
+        backup_name = f"{db_stem}_backup_{timestamp}{db_ext or '.db'}"
+        backup_path = os.path.join(db_dir, backup_name)
+
+        # extra safety: avoid overwrite if somehow same timestamp/path exists
+        counter = 1
+        while os.path.exists(backup_path):
+            backup_name = f"{db_stem}_backup_{timestamp}_{counter}{db_ext or '.db'}"
+            backup_path = os.path.join(db_dir, backup_name)
+            counter += 1
+
+        #subprocess.run(["cp", db_path, backup_path], check=True)
+        shutil.copy2(db_path, backup_path)
+        print(f"[CreateSqliteDB] Backup created: {backup_path}")
+        return backup_path
+
+    @staticmethod
+    def _coerce_nullable_int_columns(df: pd.DataFrame, cols) -> pd.DataFrame:
+        """
+        Safely coerce columns to pandas nullable Int64.
+        Any blank/whitespace/non-numeric becomes <NA>.
+        """
+        out = df.copy()
+        blankish = {"", "nan", "none", "na", "n/a", "-", "null"}
+
+        for c in cols:
+            if c not in out.columns:
+                continue
+
+            # normalize to string dtype, strip whitespace
+            s = out[c].astype("string").str.strip()
+
+            # blankish -> NA
+            s = s.mask(s.isna() | s.str.lower().isin(blankish), pd.NA)
+
+            # numeric conversion (gives float + NaN; never leaves '' behind)
+            num = pd.to_numeric(s, errors="coerce")
+
+            # now safe to cast to nullable Int64
+            out[c] = num.astype("Int64")
+
+        return out
+    
 
     # ----------------------
     # IO helpers (kept)
@@ -312,19 +377,18 @@ class CreateSqliteDB:
     # Update-mode merge (non-redundant) helpers
     # ----------------------
     def _db_path(self) -> str:
-        """
-        Normal mode:  <base_dir>/<output_dir>/<db_name>.db
-        Update mode:  write to EXISTING DB under parent of Update:
-            base_dir=tmp/Update  -> parent=tmp -> tmp/<output_dir>/<db_name>.db
-        """
+        
+        if self.db_file:
+            return normpath(self.db_file)
+
         if self.update:
-            # base_dir may already be tmp/Update due to CLI logic
             bd = normpath(self.base_dir)
             if bd.endswith(normpath("Update")):
                 parent = os.path.dirname(bd)
             else:
                 parent = bd
             return join(parent, self.output_dir, self.db_name + ".db")
+
         return join(self.base_dir, self.output_dir, self.db_name + ".db")
 
     @staticmethod
@@ -335,9 +399,16 @@ class CreateSqliteDB:
         ).fetchone()
         return row is not None
 
+    #@staticmethod
+    #def _normalize_key_series(s: pd.Series) -> pd.Series:
+    #   return s.fillna("").astype(str).str.strip()
+
     @staticmethod
     def _normalize_key_series(s: pd.Series) -> pd.Series:
-        return s.fillna("").astype(str).str.strip()
+        if pd.api.types.is_string_dtype(s) or s.dtype == object:
+            return s.astype("string").fillna("").str.strip()
+        # leave numeric/bool/datetime columns unchanged
+        return s
 
     def _fetch_existing_keys(self, conn, table: str, key_cols: list[str]) -> set:
         if not self._table_exists(conn, table):
@@ -574,6 +645,9 @@ class CreateSqliteDB:
 
         # Load incoming dataframes
         df_meta_data = self._read_tsv_required(self.meta_data, ["primary_accession"], "meta_data", dtype=str)
+        df_meta_data_updates = df_meta_data.copy()
+
+        df_meta_data = self._coerce_nullable_int_columns(df_meta_data,["length", "exclusion_status", "a", "t", "g", "c", "n", "real_length", "country_validated", "host_taxa_id"])
 
         # Track reference/master rows so they are always retained in meta_data
         acc_type_col = "accession_type" if "accession_type" in df_meta_data.columns else None
@@ -614,25 +688,50 @@ class CreateSqliteDB:
 
         df_meta_data = self._add_cluster_column(df_meta_data)
 
-        df_features = self._read_tsv_required(self.features, [], "features")
+        df_features = self._read_tsv_required(self.features, [], "features", dtype=str)
+        df_features = self._coerce_nullable_int_columns(df_features,cols=["aln_start", "aln_end", "cds_start", "cds_end"])
+        
+
         df_aln = self._read_tsv_required(self.pad_aln, [], "pad_aln")
         df_aln = self._normalize_alignment_columns(df_aln, "pad_aln")
         df_gene = self._read_tsv_required(self.gene_info, [], "gene_info")
 
+        df_gene = self._coerce_nullable_int_columns(df_gene,cols=["start", "end"])
+
         df_m49_country = self._read_csv_required(
             self.m49_countries, ["m49_code"], "m49_countries", dtype={"m49_code": str}
         )
+        df_m49_country = self._coerce_nullable_int_columns(df_m49_country,cols=["m49_code", "is_ldc", "is_lldc","is_sids"])
+        
         df_m49_interm = self._read_csv_required(self.m49_interm_region, [], "m49_interm_region")
+        df_m49_interm = self._coerce_nullable_int_columns(df_m49_interm,cols=["m49_code"])
+        
         df_m49_region = self._read_csv_required(self.m49_regions, [], "m49_regions")
+        df_m49_region = self._coerce_nullable_int_columns(
+            df_m49_region,
+            cols=["m49_code"])
+
         df_m49_sub_region = self._read_csv_required(self.m49_sub_regions, [], "m49_sub_regions")
+        df_m49_sub_region = self._coerce_nullable_int_columns(df_m49_sub_region,cols=["m49_code"])
+        
         df_proj_setting = self._read_tsv_required(self.proj_settings, [], "proj_settings")
 
         df_host_taxa = self._read_tsv_required(self.host_taxa_file, [], "host_taxa_file", dtype=str)
+        df_host_taxa = self._coerce_nullable_int_columns(df_host_taxa,cols=["taxa_id"])
+        
         df_host_lineage = self._read_tsv_required(self.host_lineage_file, [], "host_lineage_file", dtype=str)
+        df_host_lineage = self._coerce_nullable_int_columns(df_host_lineage,cols=["host_taxa_id"])
+        
+
+        
         df_host_children = self._read_tsv_required(self.host_children_file, [], "host_children_file", dtype=str)
+        df_host_children = self._coerce_nullable_int_columns(df_host_children,cols=["parent_taxa_id", "child_taxa_id"])
+        
         df_host_lineage_lookup = self._read_tsv_required(
             self.host_lineage_lookup_file, [], "host_lineage_lookup_file", dtype=str
         )
+        df_host_lineage_lookup = self._coerce_nullable_int_columns(df_host_lineage_lookup,cols=["lineage_taxa_id", "desc_taxa_id"])
+        
 
         df_fasta_sequences = self.load_fasta()
 
@@ -642,11 +741,32 @@ class CreateSqliteDB:
             df_trees = self.load_trees_from_dir(self.tree_dir)
 
         # Open DB
+        #db_path = self._db_path()
+        #os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        #conn = sqlite3.connect(db_path)
+
+       
+       
+        #db_path = self._db_path()
+        #os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
+
+        #self._backup_existing_db_if_update(db_path)
+        #conn = sqlite3.connect(db_path)
+
+        #cursor = conn.cursor()
+        
         db_path = self._db_path()
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        db_dir = os.path.dirname(db_path)
+
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+
+        self._backup_existing_db_if_update(db_path)
+
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-
+        
         # Ensure tables for info/trees exist when we need them
         cursor.execute("PRAGMA foreign_keys = ON;")
         cursor.execute(
@@ -662,12 +782,27 @@ class CreateSqliteDB:
             "CREATE TABLE IF NOT EXISTS update_exclusions (table_name TEXT, key TEXT, reason TEXT, date TEXT);"
         )
 
+        if self.update:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS updates (
+                    primary_accession TEXT,
+                    updated_at TEXT
+                );
+                """
+            )
+        if self.update:
+            self._log_updates(conn, df_meta_data_updates)
         # ----------------------
         # Write/merge tables
         # ----------------------
         # NOTE: normal mode = replace, update mode = append non-redundant.
         # meta_data
-        self.merge_table_append_nonredundant(conn, df_meta_data, "meta_data", ["primary_accession"], update_exclusions)
+
+
+        self.merge_table_append_nonredundant(
+            conn, df_meta_data, "meta_data", ["primary_accession"], None
+        )
 
         # features
         features_key = [
@@ -679,7 +814,7 @@ class CreateSqliteDB:
             "cds_end",
             "product",
         ]
-        self.merge_table_append_nonredundant(conn, df_features, "features", features_key, update_exclusions)
+        #self.merge_table_append_nonredundant(conn, df_features, "features", features_key, update_exclusions)
       
         #self.merge_table_append_nonredundant(conn, df_features, "features", None, update_exclusions)
 
@@ -890,40 +1025,78 @@ class CreateSqliteDB:
         conn.commit()
         conn.close()
 
+    # adding new sequences to the update table
+    def _log_updates(self, conn, df_meta_data: pd.DataFrame) -> int:
 
+        if not self.update or df_meta_data is None or df_meta_data.empty:
+            return 0
+
+        if "primary_accession" not in df_meta_data.columns:
+            raise ValueError("meta_data is missing required column: primary_accession")
+
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS updates (
+                primary_accession TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        df_updates = (
+            df_meta_data[["primary_accession"]]
+            .copy()
+            .dropna(subset=["primary_accession"])
+        )
+        df_updates["primary_accession"] = df_updates["primary_accession"].astype(str).str.strip()
+        df_updates = df_updates[df_updates["primary_accession"] != ""]
+        df_updates = df_updates.drop_duplicates(subset=["primary_accession"], keep="first")
+        df_updates["updated_at"] = now_str
+
+        if df_updates.empty:
+            return 0
+
+        df_updates.to_sql("updates", conn, if_exists="append", index=False)
+        print(f"[CreateSqliteDB] Logged {len(df_updates)} accessions into updates table")
+
+        return len(df_updates)
+    
 def process(args):
     db_creator = CreateSqliteDB(
-        args.meta_data,
-        args.features,
-        args.pad_aln,
-        args.gene_info,
-        args.m49_countries,
-        args.m49_interm_region,
-        args.m49_regions,
-        args.m49_sub_regions,
-        args.proj_settings,
-        args.fasta_sequences,
-        args.base_dir,
-        args.output_dir,
-        args.db_name,
-        args.db_status,
-        args.host_taxa_file,
-        args.host_lineage_file,
-        args.host_children_file,
-        args.host_lineage_lookup_file,
-        args.tree_file,
-        args.iqtree_file,
-        args.usher_tree,
-        args.tree_dir,
-        args.cluster_tsv,
-        args.cluster_min_seq_id,
-        args.filtered_ids,
-        args.filtered_details,
-        args.tree_manifest,
+        meta_data=args.meta_data,
+        features=args.features,
+        pad_aln=args.pad_aln,
+        gene_info=args.gene_info,
+        m49_countries=args.m49_countries,
+        m49_interm_region=args.m49_interm_region,
+        m49_regions=args.m49_regions,
+        m49_sub_regions=args.m49_sub_regions,
+        proj_settings=args.proj_settings,
+        fasta_sequence_file=args.fasta_sequences,
+        base_dir=args.base_dir,
+        output_dir=args.output_dir,
+        db_name=args.db_name,
+        db_status=args.db_status,
+        host_taxa_file=args.host_taxa_file,
+        host_lineage_file=args.host_lineage_file,
+        host_children_file=args.host_children_file,
+        host_lineage_lookup_file=args.host_lineage_lookup_file,
+        db_file=args.db_file,
+        tree_file=args.tree_file,
+        iqtree_file=args.iqtree_file,
+        usher_tree=args.usher_tree,
+        tree_dir=args.tree_dir,
+        cluster_tsv=args.cluster_tsv,
+        cluster_min_seq_id=args.cluster_min_seq_id,
+        filtered_ids_file=args.filtered_ids,
+        filtered_details_file=args.filtered_details,
+        tree_manifest=args.tree_manifest,
         update=args.update,
     )
     db_creator.create_db()
-
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Creating sqlite DB")
@@ -941,6 +1114,11 @@ if __name__ == "__main__":
     parser.add_argument("-msr", "--m49_sub_regions", help="M49 sub-regions", default="assets/m49_sub_region.csv")
     parser.add_argument("-s", "--proj_settings", help="Project settings", default="tmp/Software_info/software_info.tsv")
     parser.add_argument("-fa", "--fasta_sequences", help="Fasta sequences", default="tmp/GenBank-matrix/sequences.fa")
+    parser.add_argument(
+        "--db_file",
+        help="Full path to an existing or new SQLite DB file. If provided, this overrides --base_dir/--output_dir/--db_name.",
+        default=None,
+    )
     parser.add_argument("-d", "--db_name", help="Name of the Sqlite database", default="gdb")
     parser.add_argument(
         "-ds",
@@ -955,20 +1133,31 @@ if __name__ == "__main__":
     parser.add_argument("-ct", "--cluster_tsv", help="MMseqs clustering TSV (rep\\tmember)", default=None)
     parser.add_argument("-ci", "--cluster_min_seq_id", help="MMseqs min sequence identity used for clustering", default=None)
     parser.add_argument("-fi", "--filtered_ids", help="File with filtered sequence IDs (one per line) to exclude from DB", default=None)
-    parser.add_argument("-fd", "--filtered_details",
+    parser.add_argument(
+        "-fd",
+        "--filtered_details",
         help="TSV with filtered sequence details (seq_name, reference, error, warnings)",
-        default=None,)
-    parser.add_argument("--update", action="store_true",
-        help="If enabled, merge tables into the existing DB (append-only, non-redundant).",    )
-    parser.add_argument("--tree_dir",
+        default=None,
+    )
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="If enabled, merge tables into the existing DB (append-only, non-redundant).",
+    )
+    parser.add_argument(
+        "--tree_dir",
         help="Directory containing tree files and a manifest meta_data.tsv (chromosome, segment_number, tree_type, tree_name, tree_model).",
-        default=None,    )
-    
+        default=None,
+    )
     parser.add_argument("-ht", "--host_taxa_file", help="Host Taxanomy file", default="tmp/HostTaxa/Host_taxa.tsv")
     parser.add_argument("-hl", "--host_lineage_file", help="Host Lineage file", default="tmp/HostTaxa/Host_taxa_lineage.tsv")
     parser.add_argument("-hc", "--host_children_file", help="Host Children file", default="tmp/HostTaxa/Host_taxa_children.tsv")
-    parser.add_argument("-hll", "--host_lineage_lookup_file", help="Host Lineage lookup file",
-        		default="tmp/HostTaxa/Host_taxa_lineage_lookup.tsv",)
+    parser.add_argument(
+        "-hll",
+        "--host_lineage_lookup_file",
+        help="Host Lineage lookup file",
+        default="tmp/HostTaxa/Host_taxa_lineage_lookup.tsv",
+    )
 
     args = parser.parse_args()
 
