@@ -158,6 +158,9 @@ if (unexpectedParams) {
 }
 
 process TEST_DEPENDENCIES{
+    // No inputs, so every profile hashes the same: without this a -resume could
+    // reuse a preflight from another profile/work dir instead of checking this env.
+    cache false
     output:
         path "dependency_test.txt"
     shell:

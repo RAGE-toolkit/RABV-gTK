@@ -1,6 +1,10 @@
 tmp/
 results/
 work/
+# Any Nextflow work dir (work_test_seg, work_test_unseg, ...) and run logs.
+# These hold 100MB+ taxdump files that GitHub rejects on push.
+work*/
+.nf-*.log*
 .nextflow*
 variant_matrix.csv
 Alignment_consensus.fa

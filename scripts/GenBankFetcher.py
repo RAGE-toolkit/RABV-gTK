@@ -1,5 +1,6 @@
 import os
 import csv
+import json
 import sqlite3
 import time
 import random
@@ -49,6 +50,7 @@ class GenBankFetcher:
 		self.ref_list = ref_list
 		self.test_fetch_count = test_fetch_count
 		self.update_log = "update_accessions.tsv"
+		self._last_request = 0.0
 		
 		# Load NCBI API key if available and not in pytest
 		import sys
@@ -56,22 +58,52 @@ class GenBankFetcher:
 			self.api_key = self._load_ncbi_key()
 		else:
 			self.api_key = None
+
+		# Pace outgoing requests under NCBI's limit: 10 req/s with an API key,
+		# 3 req/s without. Disabled under pytest so unit tests stay fast.
+		self.min_request_interval = 0.0 if "pytest" in sys.modules else (0.11 if self.api_key else 0.36)
 		
 		# Ensure output directories exist immediately
 		os.makedirs(self.output_dir, exist_ok=True)
 		os.makedirs(join(self.output_dir, self.base_dir), exist_ok=True)
 
 	def _load_ncbi_key(self):
-		key_path = "/home3/oml4h/RABV-gTK/dev/ncbi_key"
-		if os.path.exists(key_path):
+		# Resolved relative to this script so the key travels with the checkout
+		# rather than being pinned to one server's home directory. Without a key
+		# NCBI throttles by IP at 3 req/s instead of 10 req/s.
+		env_key = os.environ.get("NCBI_API_KEY", "").strip()
+		if env_key:
+			if self._valid_ncbi_key(env_key):
+				return env_key
+			print("Warning: NCBI_API_KEY is set but does not look like a valid key; ignoring")
+
+		repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+		candidates = [
+			join(repo_root, "dev", "ncbi_key"),
+			join(repo_root, "ncbi_key"),
+			os.path.expanduser("~/.ncbi_key"),
+		]
+		for key_path in candidates:
+			if not os.path.exists(key_path):
+				continue
 			try:
 				with open(key_path, "r", encoding="utf-8") as f:
 					key = f.read().strip()
-				if key and len(key) == 36 and all(c.isalnum() or c in "-_" for c in key):
-					return key
 			except Exception as e:
 				print(f"Warning: Could not read NCBI key from {key_path}: {e}")
+				continue
+			if self._valid_ncbi_key(key):
+				print(f"[ncbi] using API key from {key_path} (10 req/s)")
+				return key
+			print(f"Warning: NCBI key in {key_path} is malformed; ignoring")
+
+		print("Warning: no NCBI API key found (looked at $NCBI_API_KEY, "
+			f"{candidates[0]}). Falling back to 3 req/s IP-based rate limiting.")
 		return None
+
+	@staticmethod
+	def _valid_ncbi_key(key):
+		return bool(key) and len(key) == 36 and all(c.isalnum() or c in "-_" for c in key)
 
 	def _get(self, url):
 		if self.api_key:
@@ -79,13 +111,47 @@ class GenBankFetcher:
 				url += f"&api_key={self.api_key}"
 			else:
 				url += f"?api_key={self.api_key}"
+		self._throttle()
 		return requests.get(url)
+
+	def _throttle(self):
+		# Pace requests ourselves instead of discovering NCBI's limit via 429s,
+		# which cost a full backoff each time they are hit.
+		if self.min_request_interval <= 0:
+			return
+		elapsed = time.time() - self._last_request
+		if elapsed < self.min_request_interval:
+			sleep(self.min_request_interval - elapsed)
+		self._last_request = time.time()
+
+	def _parse_json(self, resp, context):
+		"""Decode an E-utilities JSON body, tolerating stray control characters.
+
+		NCBI intermittently returns bodies with unescaped control characters that
+		json.loads rejects. Strip them and retry before giving up, and log the raw
+		body so a failure is diagnosable rather than an opaque JSONDecodeError.
+		"""
+		try:
+			return resp.json()
+		except ValueError:
+			pass
+
+		sanitised = "".join(ch for ch in resp.text if ord(ch) >= 32)
+		try:
+			data = json.loads(sanitised)
+			print(f"[ncbi] recovered malformed JSON for {context} by stripping control characters")
+			return data
+		except ValueError as e:
+			body = resp.text[:500].replace("\n", "\\n")
+			print(f"[ncbi] undecodable response for {context} "
+				f"(status={resp.status_code}, {len(resp.text)} bytes): {body!r}")
+			raise ValueError(f"Undecodable JSON response for {context}: {e}") from e
 
 	def get_record_count(self):
 		search_url = f"{self.base_url}esearch.fcgi?db=nucleotide&term=txid{self.taxid}[Organism:exp]&retmode=json&email={self.email}"
 		response = self._get(search_url)
 		response.raise_for_status()
-		data = response.json()
+		data = self._parse_json(response, "record count")
 		return int(data['esearchresult']['count'])
 
 	def fetch_ids(self):
@@ -101,7 +167,7 @@ class GenBankFetcher:
 		)
 		resp = self._get(hist_url)
 		resp.raise_for_status()
-		hist = resp.json()["esearchresult"]
+		hist = self._parse_json(resp, "fetch_ids ESearch history")["esearchresult"]
 		
 		count = int(hist["count"])
 		print(f"[fetch_ids] ESearch history → count={count:,} took {time.time() - t0:.1f}s")
@@ -128,7 +194,7 @@ class GenBankFetcher:
 				try:
 					page_resp = self._get(page_url)
 					page_resp.raise_for_status()
-					data = page_resp.json()
+					data = self._parse_json(page_resp, f"chunk at retstart={start}")
 					if "esearchresult" not in data:
 						raise ValueError("Incomplete JSON response: missing 'esearchresult'")
 					page = data["esearchresult"]["idlist"]
@@ -164,7 +230,7 @@ class GenBankFetcher:
 		)
 		resp = self._get(hist_url)
 		resp.raise_for_status()
-		hist = resp.json()["esearchresult"]
+		hist = self._parse_json(resp, "fetch_accs ESearch history")["esearchresult"]
 
 		count = int(hist["count"])
 		print(f"[fetch_accs] ESearch history → count={count:,} took {time.time() - t0:.1f}s")
@@ -190,7 +256,7 @@ class GenBankFetcher:
 				try:
 					page_resp = self._get(page_url)
 					page_resp.raise_for_status()
-					data = page_resp.json()
+					data = self._parse_json(page_resp, f"chunk at retstart={start}")
 					if "esearchresult" not in data:
 						raise ValueError("Incomplete JSON response: missing 'esearchresult'")
 					page = data["esearchresult"]["idlist"]
@@ -227,12 +293,7 @@ class GenBankFetcher:
 					resp = self._get(hist_url)
 					resp.raise_for_status()
 					
-					# Sanitise control characters if any exist before decoding JSON
-					# This replaces unescaped control chars with an empty string
-					sanitised_text = "".join(ch for ch in resp.text if ord(ch) >= 32 or ch in "\n\r\t")
-					
-					import json
-					data = json.loads(sanitised_text)
+					data = self._parse_json(resp, "iter_accs ESearch history")
 					hist = data["esearchresult"]
 					break
 				except (requests.exceptions.JSONDecodeError, requests.exceptions.ChunkedEncodingError, 
@@ -271,11 +332,7 @@ class GenBankFetcher:
 						page_resp = self._get(page_url)
 						page_resp.raise_for_status()
 						
-						# Apply identical sanitisation to the chunk results
-						sanitised_page = "".join(ch for ch in page_resp.text if ord(ch) >= 32 or ch in "\n\r\t")
-						import json
-						data = json.loads(sanitised_page)
-						
+						data = self._parse_json(page_resp, f"chunk at retstart={start}")
 						if "esearchresult" not in data:
 							raise ValueError("Incomplete JSON response: missing 'esearchresult'")
 						page = data["esearchresult"]["idlist"]
@@ -375,7 +432,7 @@ class GenBankFetcher:
 				)
 				response = self._get(search_url)
 				response.raise_for_status()
-				data = response.json()
+				data = self._parse_json(response, "test-run ESearch")
 				ids = data["esearchresult"]["idlist"]
 			except Exception as e:
 				print(f"Warning: Could not fetch IDs for test run: {e}")

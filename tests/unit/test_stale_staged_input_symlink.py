@@ -56,3 +56,20 @@ def test_plain_missing_file_keeps_the_original_message(tmp_path: Path):
 def test_unset_path_still_raises(empty):
     with pytest.raises(FileNotFoundError):
         CreateSqliteDB._require_file(empty, "proj_settings")
+
+
+def test_no_cached_process_is_without_inputs():
+    """Root-cause guard: an input-less process hashes the same in every profile,
+    so -resume can satisfy it from another profile's (possibly deleted) work dir.
+    Every process must take an input or opt out of caching."""
+    import re
+
+    nf = Path(__file__).resolve().parents[2] / "vgtk-init.nf"
+    blocks = re.split(r"(?m)^process\s+", nf.read_text())[1:]
+    offenders = []
+    for block in blocks:
+        name = re.match(r"\w+", block).group(0)
+        header = re.split(r"(?m)^\s*(?:shell|script|exec):", block)[0]
+        if not re.search(r"(?m)^\s*input:", header) and not re.search(r"(?m)^\s*cache\s+false", header):
+            offenders.append(name)
+    assert offenders == [], f"processes with no inputs and caching on: {offenders}"

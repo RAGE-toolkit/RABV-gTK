@@ -442,7 +442,7 @@ def main():
         default=1.0,
         help=(
             "Abort if the filtered fraction of all query sequences exceeds this. The pipeline "
-            "passes 0.02; the script default of 1.0 keeps direct/legacy callers unguarded. "
+            "passes 0.05 (0.5 for HCV profiles); the script default of 1.0 keeps direct/legacy callers unguarded. "
             "Set to 0 to disable the check entirely."
         )
     )
