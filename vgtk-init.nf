@@ -98,7 +98,7 @@ def scriptDefinedParams = [
     "scripts_dir", "publish_dir", "email", "ref_list", "bulk_fillup_table", "is_flu", "gene_info",
     "xml_dir", "update", "update_file", "update_db",
     "mmseqs_min_seq_id", "mmseqs_trim_cds_file","mutation_catalog", "mutation_virus",
-    "max_filtered_fraction", "min_segment_retention",
+    "max_filtered_fraction", "max_gap_filtered_fraction", "min_segment_retention",
     "mutation_publications", "mutation_clinical_trials",
     "gisaid_dir", "previous_db", "conda_path", "test_max_cluster_seqs", "max_threads", "iqtree_mem", "ref_set_aligned",
     "min_seq_length_ratio", "max_aln_gap_proportion", "tree_free", "base_tree_only",
@@ -693,7 +693,8 @@ process COLLECT_FILTERED_SEQUENCES {
         --max_gap_proportion !{params.max_aln_gap_proportion} \
         --ref_list !{master_file_opt} \
         --precomputed_ref_dir "!{ref_set_aligned_dir}" \
-        --max_filtered_fraction !{params.max_filtered_fraction}
+        --max_filtered_fraction !{params.max_filtered_fraction} \
+        --max_gap_filtered_fraction !{params.max_gap_filtered_fraction}
     '''
 }
 

@@ -339,6 +339,11 @@ def collect_filtered_sequences(nextalign_dir: str, output_file: str, max_gap_pro
     return filtered
 
 
+def is_gap_filtered(info: dict) -> bool:
+    """True when a sequence was dropped only by the gap filter."""
+    return info.get("error", "").startswith("high_gap_proportion:")
+
+
 def write_summary(filtered: dict, output_file: str):
     """Write a compact summary for visibility in published outputs."""
     summary_file = output_file.replace(".tsv", "_summary.txt")
@@ -441,9 +446,21 @@ def main():
         type=float,
         default=1.0,
         help=(
-            "Abort if the filtered fraction of all query sequences exceeds this. The pipeline "
-            "passes 0.05 (0.5 for HCV profiles); the script default of 1.0 keeps direct/legacy callers unguarded. "
-            "Set to 0 to disable the check entirely."
+            "Abort if sequences dropped for reasons OTHER than the gap filter (nextalign errors, "
+            "unprojectable references) exceed this fraction of all queries. That is the class of "
+            "failure that deleted 633,988 influenza sequences. The pipeline passes 0.05; the script "
+            "default of 1.0 keeps direct/legacy callers unguarded. Set to 0 to disable."
+        )
+    )
+    parser.add_argument(
+        "--max_gap_filtered_fraction",
+        type=float,
+        default=1.0,
+        help=(
+            "Abort if sequences dropped by the gap filter alone exceed this fraction of all queries. "
+            "Kept separate and loose because short partial amplicons are a normal, virus-dependent "
+            "share of GenBank (~20%% RABV, ~35%% HCV); this only catches the filter collapsing onto "
+            "everything. The pipeline passes 0.6; 1.0 or 0 disables."
         )
     )
 
@@ -467,19 +484,31 @@ def main():
     print(f"Found {len(filtered)} filtered sequences")
 
     # Guard G1. Losing a sixth of the database used to be a stderr line and exit 0.
+    # Gap-filter drops are judged separately: they are deliberate quality filtering
+    # whose rate varies by virus, and lumping them in forced per-virus thresholds
+    # loose enough to hide a real projectability failure.
     total_queries = count_query_sequences(args.nextalign_dir)
-    if args.max_filtered_fraction and 0 < args.max_filtered_fraction < 1.0 and total_queries:
-        fraction = len(filtered) / total_queries
-        print(f"[guard] filtered {len(filtered)}/{total_queries} query sequences ({fraction:.4f})")
-        if fraction > args.max_filtered_fraction:
-            print(
-                f"ERROR: filtered fraction {fraction:.4f} exceeds --max_filtered_fraction "
-                f"{args.max_filtered_fraction}. {len(filtered)} of {total_queries} query "
-                f"sequences would be dropped. Refusing to continue; inspect "
-                f"{output_path.replace('.tsv', '_summary.txt')}.",
-                file=sys.stderr,
-            )
-            sys.exit(3)
+    if total_queries:
+        gap_dropped = sum(1 for info in filtered.values() if is_gap_filtered(info))
+        other_dropped = len(filtered) - gap_dropped
+        checks = [
+            ("non-gap", other_dropped, args.max_filtered_fraction, "--max_filtered_fraction"),
+            ("gap-filter", gap_dropped, args.max_gap_filtered_fraction, "--max_gap_filtered_fraction"),
+        ]
+        for label, dropped, limit, flag in checks:
+            if not (limit and 0 < limit < 1.0):
+                continue
+            fraction = dropped / total_queries
+            print(f"[guard] {label} drops {dropped}/{total_queries} query sequences ({fraction:.4f}, limit {limit})")
+            if fraction > limit:
+                print(
+                    f"ERROR: {label} filtered fraction {fraction:.4f} exceeds {flag} "
+                    f"{limit}. {dropped} of {total_queries} query sequences would be dropped "
+                    f"({len(filtered)} filtered in total). Refusing to continue; inspect "
+                    f"{output_path.replace('.tsv', '_summary.txt')}.",
+                    file=sys.stderr,
+                )
+                sys.exit(3)
 
 
     if filtered:

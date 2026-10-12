@@ -287,3 +287,46 @@ def test_guard_g1_passes_when_the_backbone_is_supplied(tmp_path: Path):
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _short_partials_fixture(tmp_path: Path, n_full: int, n_partial: int):
+    """A RABV-like batch: one projectable reference, some full-length queries and
+    some short partial amplicons that the gap filter rightly drops."""
+    nextalign_dir = tmp_path / "Nextalign"
+    ref_aln = nextalign_dir / "reference_aln" / "REF1"
+    ref_aln.mkdir(parents=True, exist_ok=True)
+    full, partial = "ACGT" * 25, "ACGT" + "-" * 96
+    (ref_aln / "REF1.aligned.fasta").write_text(f">REF1\n{full}\n", encoding="utf-8")
+    d = nextalign_dir / "query_aln" / "REF1"
+    d.mkdir(parents=True, exist_ok=True)
+    body = f">REF1\n{full}\n"
+    body += "".join(f">FULL{i}\n{full}\n" for i in range(n_full))
+    body += "".join(f">PART{i}\n{partial}\n" for i in range(n_partial))
+    (d / "REF1.aligned.fasta").write_text(body, encoding="utf-8")
+    return nextalign_dir
+
+
+def _run_guard(tmp_path, nextalign_dir, *extra):
+    return subprocess.run(
+        [sys.executable, str(SCRIPT_PATH),
+         "-n", str(nextalign_dir), "-o", "filtered.tsv", "-b", str(tmp_path),
+         "--max_gap_proportion", "0.9", *extra],
+        capture_output=True, text=True,
+    )
+
+
+def test_guard_g1_ignores_gap_filter_drops(tmp_path: Path):
+    """20% short partials (the RABV norm) must not trip the tight non-gap guard."""
+    nextalign_dir = _short_partials_fixture(tmp_path, n_full=8, n_partial=2)
+    result = _run_guard(tmp_path, nextalign_dir,
+                        "--max_filtered_fraction", "0.05", "--max_gap_filtered_fraction", "0.6")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "filtered_ids.txt").read_text().split() == ["PART0", "PART1"]
+
+
+def test_gap_filter_guard_aborts_when_the_filter_eats_everything(tmp_path: Path):
+    nextalign_dir = _short_partials_fixture(tmp_path, n_full=2, n_partial=8)
+    result = _run_guard(tmp_path, nextalign_dir,
+                        "--max_filtered_fraction", "0.05", "--max_gap_filtered_fraction", "0.6")
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "exceeds --max_gap_filtered_fraction" in result.stderr
